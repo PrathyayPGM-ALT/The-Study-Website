@@ -106,6 +106,9 @@ def chat_completion(messages: list[dict], system: str = "") -> str:
     return response.choices[0].message.content
 
 
+# ════════════════════════════════════════════════════════════════════════
+# USER PROFILE
+# ════════════════════════════════════════════════════════════════════════
 
 @app.route("/api/me", methods=["GET"])
 @require_auth
@@ -121,6 +124,9 @@ def get_me():
     })
 
 
+# ════════════════════════════════════════════════════════════════════════
+# FILES
+# ════════════════════════════════════════════════════════════════════════
 
 @app.route("/api/files", methods=["GET"])
 @require_auth
@@ -188,7 +194,9 @@ def delete_file(file_id: str):
     return jsonify({"message": "File deleted"})
 
 
-
+# ════════════════════════════════════════════════════════════════════════
+# CHAT
+# ════════════════════════════════════════════════════════════════════════
 
 CHAT_SYSTEM = (
     "You are a helpful study assistant. "
@@ -290,7 +298,9 @@ def clear_chat(session_id: str):
     return jsonify({"message": "Chat history cleared"})
 
 
-
+# ════════════════════════════════════════════════════════════════════════
+# OUTPUT GENERATION
+# ════════════════════════════════════════════════════════════════════════
 
 OUTPUT_TYPES = {"summary", "flashcards", "quiz", "key_points", "explain"}
 
@@ -460,7 +470,9 @@ def generate_cornell():
     return jsonify({"output_id": output_id, "cornell": cornell_data}), 201
 
 
-
+# ════════════════════════════════════════════════════════════════════════
+# PLAYGROUND
+# ════════════════════════════════════════════════════════════════════════
 
 PLAYGROUND_SYSTEM = (
     "You are an expert coding and study assistant. "
@@ -559,7 +571,9 @@ def health():
     return jsonify({"status": "ok", "model": DEFAULT_MODEL})
 
 
-
+# ════════════════════════════════════════════════════════════════════════
+# Serve frontend files
+# ════════════════════════════════════════════════════════════════════════
 
 @app.route("/")
 def serve_index():
@@ -572,4 +586,5 @@ def serve_static(filename):
 
 
 if __name__ == "__main__":
-    app.run(debug=True, port=8100)
+    port = int(os.environ.get("PORT", 8100))
+    app.run(host="0.0.0.0", port=port, debug=False)
