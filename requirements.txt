@@ -5,3 +5,4 @@ python-dotenv
 pdfplumber
 python-docx
 werkzeug
+supabase
