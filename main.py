@@ -106,9 +106,6 @@ def chat_completion(messages: list[dict], system: str = "") -> str:
     return response.choices[0].message.content
 
 
-# ════════════════════════════════════════════════════════════════════════
-# USER PROFILE
-# ════════════════════════════════════════════════════════════════════════
 
 @app.route("/api/me", methods=["GET"])
 @require_auth
@@ -124,9 +121,6 @@ def get_me():
     })
 
 
-# ════════════════════════════════════════════════════════════════════════
-# FILES
-# ════════════════════════════════════════════════════════════════════════
 
 @app.route("/api/files", methods=["GET"])
 @require_auth
@@ -193,10 +187,6 @@ def delete_file(file_id: str):
     supabase.table("files").delete().eq("id", file_id).eq("user_id", user.id).execute()
     return jsonify({"message": "File deleted"})
 
-
-# ════════════════════════════════════════════════════════════════════════
-# CHAT
-# ════════════════════════════════════════════════════════════════════════
 
 CHAT_SYSTEM = (
     "You are a helpful study assistant. "
@@ -297,10 +287,6 @@ def clear_chat(session_id: str):
     supabase.table("chat_messages").delete().eq("session_id", session_id).eq("user_id", user.id).execute()
     return jsonify({"message": "Chat history cleared"})
 
-
-# ════════════════════════════════════════════════════════════════════════
-# OUTPUT GENERATION
-# ════════════════════════════════════════════════════════════════════════
 
 OUTPUT_TYPES = {"summary", "flashcards", "quiz", "key_points", "explain"}
 
@@ -470,9 +456,6 @@ def generate_cornell():
     return jsonify({"output_id": output_id, "cornell": cornell_data}), 201
 
 
-# ════════════════════════════════════════════════════════════════════════
-# PLAYGROUND
-# ════════════════════════════════════════════════════════════════════════
 
 PLAYGROUND_SYSTEM = (
     "You are an expert coding and study assistant. "
@@ -570,10 +553,6 @@ def get_config():
 def health():
     return jsonify({"status": "ok", "model": DEFAULT_MODEL})
 
-
-# ════════════════════════════════════════════════════════════════════════
-# Serve frontend files
-# ════════════════════════════════════════════════════════════════════════
 
 @app.route("/")
 def serve_index():
