@@ -1,0 +1,11 @@
+.env
+uploads/
+.claude/
+__pycache__/
+*.pyc
+*.class
+blah.java
+nul
+.idea/
+venv/
+.venv/
