@@ -10,10 +10,11 @@ from datetime import datetime
 from flask import Flask, request, jsonify, send_from_directory
 from flask_cors import CORS
 from dotenv import load_dotenv
-from openai import OpenAI  # Groq uses the OpenAI-compatible SDK
+from openai import OpenAI
 import pdfplumber
 from docx import Document
 from werkzeug.utils import secure_filename
+from supabase import create_client
 
 load_dotenv()
 
@@ -25,16 +26,43 @@ UPLOAD_FOLDER = Path("uploads")
 UPLOAD_FOLDER.mkdir(exist_ok=True)
 ALLOWED_EXTENSIONS = {"pdf", "txt", "docx", "md"}
 
+# Groq AI client
 client = OpenAI(
     api_key=os.getenv("GROQ_API_KEY"),
     base_url="https://api.groq.com/openai/v1",
 )
 DEFAULT_MODEL = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
 
-uploaded_files: dict[str, dict] = {}
-chat_sessions: dict[str, list] = {}
-saved_outputs: dict[str, dict] = {}
+# Supabase admin client (uses service role key for server-side operations)
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_SERVICE_KEY = os.getenv("SUPABASE_SERVICE_KEY")
+supabase = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
 
+
+def get_user_from_token():
+    """Extract and verify the user from the Authorization header."""
+    auth_header = request.headers.get("Authorization", "")
+    if not auth_header.startswith("Bearer "):
+        return None
+    token = auth_header.split("Bearer ")[1]
+    try:
+        user_response = supabase.auth.get_user(token)
+        return user_response.user
+    except Exception:
+        return None
+
+
+def require_auth(f):
+    """Decorator that requires a valid Supabase JWT."""
+    from functools import wraps
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        user = get_user_from_token()
+        if not user:
+            return jsonify({"error": "Unauthorized"}), 401
+        request.user = user
+        return f(*args, **kwargs)
+    return decorated
 
 
 def allowed_file(filename: str) -> bool:
@@ -42,7 +70,6 @@ def allowed_file(filename: str) -> bool:
 
 
 def extract_text(filepath: Path, extension: str) -> str:
-    """Extract plain text from uploaded file."""
     if extension == "pdf":
         text_parts = []
         with pdfplumber.open(filepath) as pdf:
@@ -51,22 +78,19 @@ def extract_text(filepath: Path, extension: str) -> str:
                 if page_text:
                     text_parts.append(page_text)
         return "\n".join(text_parts)
-
     if extension == "docx":
         doc = Document(filepath)
         return "\n".join(p.text for p in doc.paragraphs if p.text.strip())
-
-    # txt / md
     return filepath.read_text(encoding="utf-8", errors="replace")
 
 
-def build_notes_context(file_ids: list[str]) -> str:
-    """Build a context block from selected uploaded notes."""
+def build_notes_context(user_id: str, file_ids: list[str]) -> str:
     parts = []
     for fid in file_ids:
-        meta = uploaded_files.get(fid)
-        if meta:
-            parts.append(f"--- Notes: {meta['filename']} ---\n{meta['text']}\n")
+        result = supabase.table("files").select("filename, text_content").eq("id", fid).eq("user_id", user_id).execute()
+        if result.data:
+            row = result.data[0]
+            parts.append(f"--- Notes: {row['filename']} ---\n{row['text_content']}\n")
     return "\n".join(parts)
 
 
@@ -82,24 +106,34 @@ def chat_completion(messages: list[dict], system: str = "") -> str:
     return response.choices[0].message.content
 
 
+
+@app.route("/api/me", methods=["GET"])
+@require_auth
+def get_me():
+    user = request.user
+    result = supabase.table("profiles").select("*").eq("id", user.id).execute()
+    profile = result.data[0] if result.data else {}
+    return jsonify({
+        "id": user.id,
+        "email": user.email,
+        "full_name": profile.get("full_name", ""),
+        "avatar_url": profile.get("avatar_url", ""),
+    })
+
+
+
 @app.route("/api/files", methods=["GET"])
+@require_auth
 def list_files():
-    """Return metadata for all uploaded files (no raw text)."""
-    files = [
-        {
-            "id": fid,
-            "filename": meta["filename"],
-            "size": meta["size"],
-            "uploaded_at": meta["uploaded_at"],
-        }
-        for fid, meta in uploaded_files.items()
-    ]
-    return jsonify({"files": files})
+    user = request.user
+    result = supabase.table("files").select("id, filename, size, uploaded_at").eq("user_id", user.id).order("uploaded_at", desc=True).execute()
+    return jsonify({"files": result.data or []})
 
 
 @app.route("/api/files/upload", methods=["POST"])
+@require_auth
 def upload_file():
-    """Upload a notes file (PDF, DOCX, TXT, MD) and extract its text."""
+    user = request.user
     if "file" not in request.files:
         return jsonify({"error": "No file part in request"}), 400
 
@@ -123,30 +157,36 @@ def upload_file():
         save_path.unlink(missing_ok=True)
         return jsonify({"error": f"Could not extract text: {exc}"}), 422
 
-    uploaded_files[file_id] = {
+    file_size = save_path.stat().st_size
+
+    # Store in Supabase
+    supabase.table("files").insert({
+        "id": file_id,
+        "user_id": user.id,
         "filename": filename,
-        "path": str(save_path),
-        "size": save_path.stat().st_size,
-        "text": text,
-        "uploaded_at": datetime.utcnow().isoformat(),
-    }
+        "size": file_size,
+        "text_content": text,
+        "storage_path": str(save_path),
+    }).execute()
+
+    # Clean up local file after extracting text
+    save_path.unlink(missing_ok=True)
 
     return jsonify({
         "id": file_id,
         "filename": filename,
-        "size": uploaded_files[file_id]["size"],
-        "preview": text[:300] + ("…" if len(text) > 300 else ""),
+        "size": file_size,
+        "preview": text[:300] + ("..." if len(text) > 300 else ""),
     }), 201
 
 
 @app.route("/api/files/<file_id>", methods=["DELETE"])
+@require_auth
 def delete_file(file_id: str):
-    """Remove an uploaded file."""
-    meta = uploaded_files.pop(file_id, None)
-    if not meta:
-        return jsonify({"error": "File not found"}), 404
-    Path(meta["path"]).unlink(missing_ok=True)
+    user = request.user
+    supabase.table("files").delete().eq("id", file_id).eq("user_id", user.id).execute()
     return jsonify({"message": "File deleted"})
+
 
 
 
@@ -158,80 +198,104 @@ CHAT_SYSTEM = (
 
 
 @app.route("/api/chat/session", methods=["POST"])
+@require_auth
 def create_session():
-    """Create a new chat session (optionally attach note file IDs)."""
+    user = request.user
     body = request.get_json(silent=True) or {}
-    session_id = str(uuid.uuid4())
     file_ids = body.get("file_ids", [])
     system_prompt = CHAT_SYSTEM
 
     if file_ids:
-        notes = build_notes_context(file_ids)
+        notes = build_notes_context(user.id, file_ids)
         system_prompt += f"\n\nThe user has shared the following study notes:\n{notes}"
 
-    chat_sessions[session_id] = {
-        "messages": [],
-        "system": system_prompt,
+    session_id = str(uuid.uuid4())
+    supabase.table("chat_sessions").insert({
+        "id": session_id,
+        "user_id": user.id,
+        "name": body.get("name", "New Chat"),
         "file_ids": file_ids,
-        "created_at": datetime.utcnow().isoformat(),
-    }
+        "system_prompt": system_prompt,
+    }).execute()
+
     return jsonify({"session_id": session_id}), 201
 
 
+@app.route("/api/chat/sessions", methods=["GET"])
+@require_auth
+def list_sessions():
+    user = request.user
+    result = supabase.table("chat_sessions").select("id, name, created_at").eq("user_id", user.id).order("created_at", desc=True).execute()
+    return jsonify({"sessions": result.data or []})
+
+
 @app.route("/api/chat/<session_id>", methods=["GET"])
+@require_auth
 def get_chat(session_id: str):
-    """Return the message history for a session."""
-    session = chat_sessions.get(session_id)
-    if not session:
-        return jsonify({"error": "Session not found"}), 404
-    return jsonify({"messages": session["messages"]})
+    user = request.user
+    result = supabase.table("chat_messages").select("role, content, created_at").eq("session_id", session_id).eq("user_id", user.id).order("created_at").execute()
+    return jsonify({"messages": result.data or []})
 
 
 @app.route("/api/chat/<session_id>", methods=["POST"])
+@require_auth
 def send_message(session_id: str):
-    """Send a user message and receive an AI reply."""
-    session = chat_sessions.get(session_id)
-    if not session:
-        return jsonify({"error": "Session not found"}), 404
-
+    user = request.user
     body = request.get_json(silent=True) or {}
     user_message = (body.get("message") or "").strip()
     if not user_message:
         return jsonify({"error": "Message is required"}), 400
 
-    session["messages"].append({"role": "user", "content": user_message})
+    # Get session
+    session_result = supabase.table("chat_sessions").select("system_prompt").eq("id", session_id).eq("user_id", user.id).execute()
+    if not session_result.data:
+        return jsonify({"error": "Session not found"}), 404
+
+    system_prompt = session_result.data[0]["system_prompt"]
+
+    # Get existing messages
+    msgs_result = supabase.table("chat_messages").select("role, content").eq("session_id", session_id).order("created_at").execute()
+    messages = [{"role": m["role"], "content": m["content"]} for m in (msgs_result.data or [])]
+    messages.append({"role": "user", "content": user_message})
+
+    # Save user message
+    supabase.table("chat_messages").insert({
+        "session_id": session_id,
+        "user_id": user.id,
+        "role": "user",
+        "content": user_message,
+    }).execute()
 
     try:
-        reply = chat_completion(session["messages"], system=session["system"])
+        reply = chat_completion(messages, system=system_prompt)
     except Exception as exc:
-        session["messages"].pop()
         return jsonify({"error": str(exc)}), 502
 
-    session["messages"].append({"role": "assistant", "content": reply})
+    # Save assistant message
+    supabase.table("chat_messages").insert({
+        "session_id": session_id,
+        "user_id": user.id,
+        "role": "assistant",
+        "content": reply,
+    }).execute()
 
-    return jsonify({
-        "reply": reply,
-        "message_count": len(session["messages"]),
-    })
+    return jsonify({"reply": reply, "message_count": len(messages) + 1})
 
 
 @app.route("/api/chat/<session_id>", methods=["DELETE"])
+@require_auth
 def clear_chat(session_id: str):
-    """Clear the message history (keep session alive)."""
-    session = chat_sessions.get(session_id)
-    if not session:
-        return jsonify({"error": "Session not found"}), 404
-    session["messages"] = []
+    user = request.user
+    supabase.table("chat_messages").delete().eq("session_id", session_id).eq("user_id", user.id).execute()
     return jsonify({"message": "Chat history cleared"})
+
+
 
 
 OUTPUT_TYPES = {"summary", "flashcards", "quiz", "key_points", "explain"}
 
 OUTPUT_PROMPTS = {
-    "summary": (
-        "Produce a thorough but concise summary of the following study notes. "
-        "Use clear headings and bullet points where appropriate."
-    ),
+    "summary": "Produce a thorough but concise summary of the following study notes. Use clear headings and bullet points where appropriate.",
     "flashcards": (
         "Create a set of flashcards from the following study notes. "
         "Return ONLY valid JSON, no markdown, no code fences, no extra text. "
@@ -246,38 +310,31 @@ OUTPUT_PROMPTS = {
         '[{"q":"Question text?","options":["A) ...","B) ...","C) ...","D) ..."],"answer":0}]\n'
         "where \"answer\" is the zero-based index of the correct option."
     ),
-    "key_points": (
-        "Extract the most important key points from the following study notes. "
-        "Present them as a numbered list."
-    ),
-    "explain": (
-        "Explain the main concepts in the following study notes as if teaching "
-        "a beginner. Use simple language and examples."
-    ),
+    "key_points": "Extract the most important key points from the following study notes. Present them as a numbered list.",
+    "explain": "Explain the main concepts in the following study notes as if teaching a beginner. Use simple language and examples.",
 }
 
 
 @app.route("/api/output/generate", methods=["POST"])
+@require_auth
 def generate_output():
-    """Generate structured study material from uploaded notes."""
+    user = request.user
     body = request.get_json(silent=True) or {}
-    file_ids: list[str] = body.get("file_ids", [])
-    output_type: str = body.get("type", "summary").lower()
-    custom_prompt: str = body.get("custom_prompt", "").strip()
+    file_ids = body.get("file_ids", [])
+    output_type = body.get("type", "summary").lower()
+    custom_prompt = body.get("custom_prompt", "").strip()
 
     if not file_ids:
         return jsonify({"error": "Provide at least one file_id"}), 400
     if output_type not in OUTPUT_TYPES and not custom_prompt:
         return jsonify({"error": f"type must be one of {OUTPUT_TYPES} or supply custom_prompt"}), 400
 
-    notes = build_notes_context(file_ids)
+    notes = build_notes_context(user.id, file_ids)
     if not notes.strip():
         return jsonify({"error": "No text found in the selected files"}), 422
 
     instruction = custom_prompt if custom_prompt else OUTPUT_PROMPTS[output_type]
-    messages = [
-        {"role": "user", "content": f"{instruction}\n\n{notes}"}
-    ]
+    messages = [{"role": "user", "content": f"{instruction}\n\n{notes}"}]
 
     try:
         result = chat_completion(messages)
@@ -285,54 +342,57 @@ def generate_output():
         return jsonify({"error": str(exc)}), 502
 
     output_id = str(uuid.uuid4())
-    saved_outputs[output_id] = {
+    supabase.table("saved_outputs").insert({
+        "id": output_id,
+        "user_id": user.id,
         "type": output_type if not custom_prompt else "custom",
         "file_ids": file_ids,
         "content": result,
-        "created_at": datetime.utcnow().isoformat(),
-    }
+    }).execute()
 
     return jsonify({
         "output_id": output_id,
-        "type": saved_outputs[output_id]["type"],
+        "type": output_type if not custom_prompt else "custom",
         "content": result,
     }), 201
 
 
 @app.route("/api/output", methods=["GET"])
+@require_auth
 def list_outputs():
-    """Return all previously generated outputs."""
-    outputs = [
-        {
-            "output_id": oid,
-            "type": data["type"],
-            "file_ids": data["file_ids"],
-            "created_at": data["created_at"],
-            "preview": data["content"][:200] + ("…" if len(data["content"]) > 200 else ""),
-        }
-        for oid, data in saved_outputs.items()
-    ]
+    user = request.user
+    result = supabase.table("saved_outputs").select("id, type, file_ids, content, created_at").eq("user_id", user.id).order("created_at", desc=True).execute()
+    outputs = []
+    for row in (result.data or []):
+        outputs.append({
+            "output_id": row["id"],
+            "type": row["type"],
+            "file_ids": row["file_ids"],
+            "created_at": row["created_at"],
+            "preview": row["content"][:200] + ("..." if len(row["content"]) > 200 else ""),
+        })
     return jsonify({"outputs": outputs})
 
 
 @app.route("/api/output/<output_id>", methods=["GET"])
+@require_auth
 def get_output(output_id: str):
-    """Fetch a specific saved output."""
-    data = saved_outputs.get(output_id)
-    if not data:
+    user = request.user
+    result = supabase.table("saved_outputs").select("*").eq("id", output_id).eq("user_id", user.id).execute()
+    if not result.data:
         return jsonify({"error": "Output not found"}), 404
-    return jsonify({"output_id": output_id, **data})
+    row = result.data[0]
+    return jsonify({"output_id": row["id"], "type": row["type"], "content": row["content"], "created_at": row["created_at"]})
 
 
 @app.route("/api/output/<output_id>", methods=["DELETE"])
+@require_auth
 def delete_output(output_id: str):
-    saved_outputs.pop(output_id, None)
+    user = request.user
+    supabase.table("saved_outputs").delete().eq("id", output_id).eq("user_id", user.id).execute()
     return jsonify({"message": "Output deleted"})
 
 
-# ════════════════════════════════════════════════════════════════════════
-# 3b. CORNELL NOTES
-# ════════════════════════════════════════════════════════════════════════
 
 CORNELL_SYSTEM = (
     "You are a study assistant that creates Cornell Notes. "
@@ -345,91 +405,62 @@ CORNELL_SYSTEM = (
     '  "summary": "A concise summary paragraph covering the main ideas."\n'
     '}\n\n'
     "Rules:\n"
-    "- cues and notes arrays MUST have the same length; each cue pairs with the note at the same index.\n"
-    "- cues should be concise questions or keywords (left column).\n"
-    "- notes should be detailed explanations or answers (right column).\n"
-    "- summary should be 2-4 sentences capturing the big picture.\n"
+    "- cues and notes arrays MUST have the same length.\n"
     "- Generate at least 5 cue/note pairs.\n"
     "- Return ONLY the JSON object, nothing else."
 )
 
 
 @app.route("/api/cornell/generate", methods=["POST"])
+@require_auth
 def generate_cornell():
-    """Generate Cornell Notes from uploaded study material."""
+    user = request.user
     body = request.get_json(silent=True) or {}
-    file_ids: list[str] = body.get("file_ids", [])
+    file_ids = body.get("file_ids", [])
 
     if not file_ids:
         return jsonify({"error": "Provide at least one file_id"}), 400
 
-    notes = build_notes_context(file_ids)
+    notes = build_notes_context(user.id, file_ids)
     if not notes.strip():
         return jsonify({"error": "No text found in the selected files"}), 422
 
-    messages = [
-        {"role": "user", "content": f"Create Cornell Notes from the following study material:\n\n{notes}"}
-    ]
+    messages = [{"role": "user", "content": f"Create Cornell Notes from the following study material:\n\n{notes}"}]
 
     try:
         result = chat_completion(messages, system=CORNELL_SYSTEM)
     except Exception as exc:
         return jsonify({"error": str(exc)}), 502
 
-    # Parse the JSON response from the AI
     try:
-        # Strip markdown fences if the model wraps them
         cleaned = result.strip()
         if cleaned.startswith("```"):
             cleaned = cleaned.split("\n", 1)[1] if "\n" in cleaned else cleaned[3:]
             if cleaned.endswith("```"):
                 cleaned = cleaned[:-3]
             cleaned = cleaned.strip()
-
         cornell_data = json.loads(cleaned)
-
-        # Validate required keys
         for key in ("title", "cues", "notes", "summary"):
             if key not in cornell_data:
                 raise ValueError(f"Missing key: {key}")
-        if len(cornell_data["cues"]) != len(cornell_data["notes"]):
-            raise ValueError("cues and notes arrays must have the same length")
-
     except (json.JSONDecodeError, ValueError) as exc:
-        # Fall back: return raw text so the frontend can still display something
         output_id = str(uuid.uuid4())
-        saved_outputs[output_id] = {
-            "type": "cornell",
-            "file_ids": file_ids,
-            "content": result,
-            "cornell": None,
-            "created_at": datetime.utcnow().isoformat(),
-        }
-        return jsonify({
-            "output_id": output_id,
-            "cornell": None,
-            "raw": result,
-            "parse_error": str(exc),
-        }), 201
+        supabase.table("saved_outputs").insert({
+            "id": output_id, "user_id": user.id, "type": "cornell",
+            "file_ids": file_ids, "content": result, "cornell_data": None,
+        }).execute()
+        return jsonify({"output_id": output_id, "cornell": None, "raw": result, "parse_error": str(exc)}), 201
 
     output_id = str(uuid.uuid4())
-    saved_outputs[output_id] = {
-        "type": "cornell",
-        "file_ids": file_ids,
-        "content": result,
-        "cornell": cornell_data,
-        "created_at": datetime.utcnow().isoformat(),
-    }
+    supabase.table("saved_outputs").insert({
+        "id": output_id, "user_id": user.id, "type": "cornell",
+        "file_ids": file_ids, "content": result, "cornell_data": cornell_data,
+    }).execute()
 
-    return jsonify({
-        "output_id": output_id,
-        "cornell": cornell_data,
-    }), 201
+    return jsonify({"output_id": output_id, "cornell": cornell_data}), 201
 
 
-# ════════════════════════════════════════════════════════════════════════
-# 4. PLAYGROUND  (free-form AI + sandboxed code execution)
-# ════════════════════════════════════════════════════════════════════════
+
 
 PLAYGROUND_SYSTEM = (
     "You are an expert coding and study assistant. "
@@ -440,21 +471,19 @@ PLAYGROUND_SYSTEM = (
 
 
 @app.route("/api/playground/ask", methods=["POST"])
+@require_auth
 def playground_ask():
-    """
-    Free-form prompt to the AI — no session history.
-    Optionally attach note file IDs for context.
-    """
+    user = request.user
     body = request.get_json(silent=True) or {}
-    prompt: str = (body.get("prompt") or "").strip()
-    file_ids: list[str] = body.get("file_ids", [])
+    prompt = (body.get("prompt") or "").strip()
+    file_ids = body.get("file_ids", [])
 
     if not prompt:
         return jsonify({"error": "prompt is required"}), 400
 
     system = PLAYGROUND_SYSTEM
     if file_ids:
-        notes = build_notes_context(file_ids)
+        notes = build_notes_context(user.id, file_ids)
         system += f"\n\nThe user has provided these study notes for reference:\n{notes}"
 
     try:
@@ -466,36 +495,23 @@ def playground_ask():
 
 
 @app.route("/api/playground/run", methods=["POST"])
+@require_auth
 def playground_run():
-    """
-    Execute a Python code snippet in a sandboxed subprocess.
-    Returns stdout, stderr and exit code.
-    WARNING: For production, replace with a proper sandbox (e.g. Docker / Pyodide).
-    """
     body = request.get_json(silent=True) or {}
-    code: str = body.get("code", "")
-
+    code = body.get("code", "")
     if not code.strip():
         return jsonify({"error": "code is required"}), 400
 
-    with tempfile.NamedTemporaryFile(
-        mode="w", suffix=".py", delete=False, encoding="utf-8"
-    ) as tmp:
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False, encoding="utf-8") as tmp:
         tmp.write(code)
         tmp_path = tmp.name
 
     try:
         proc = subprocess.run(
             [sys.executable, tmp_path],
-            capture_output=True,
-            text=True,
-            timeout=10,   # 10-second hard limit
+            capture_output=True, text=True, timeout=10,
         )
-        return jsonify({
-            "stdout": proc.stdout,
-            "stderr": proc.stderr,
-            "exit_code": proc.returncode,
-        })
+        return jsonify({"stdout": proc.stdout, "stderr": proc.stderr, "exit_code": proc.returncode})
     except subprocess.TimeoutExpired:
         return jsonify({"error": "Execution timed out (10 s limit)"}), 408
     except Exception as exc:
@@ -505,11 +521,11 @@ def playground_run():
 
 
 @app.route("/api/playground/explain", methods=["POST"])
+@require_auth
 def playground_explain():
-    """Ask the AI to explain a piece of code."""
     body = request.get_json(silent=True) or {}
-    code: str = (body.get("code") or "").strip()
-    language: str = body.get("language", "Python")
+    code = (body.get("code") or "").strip()
+    language = body.get("language", "Python")
 
     if not code:
         return jsonify({"error": "code is required"}), 400
@@ -521,29 +537,38 @@ def playground_explain():
     )
 
     try:
-        reply = chat_completion(
-            [{"role": "user", "content": prompt}],
-            system=PLAYGROUND_SYSTEM,
-        )
+        reply = chat_completion([{"role": "user", "content": prompt}], system=PLAYGROUND_SYSTEM)
     except Exception as exc:
         return jsonify({"error": str(exc)}), 502
 
     return jsonify({"explanation": reply})
 
 
-# ════════════════════════════════════════════════════════════════════════
-# Health check
-# ════════════════════════════════════════════════════════════════════════
+
+@app.route("/api/config", methods=["GET"])
+def get_config():
+    """Return public Supabase config for the frontend."""
+    return jsonify({
+        "supabase_url": SUPABASE_URL,
+        "supabase_anon_key": os.getenv("SUPABASE_ANON_KEY"),
+    })
+
 
 @app.route("/api/health", methods=["GET"])
 def health():
-    return jsonify({
-        "status": "ok",
-        "model": DEFAULT_MODEL,
-        "uploaded_files": len(uploaded_files),
-        "active_sessions": len(chat_sessions),
-        "saved_outputs": len(saved_outputs),
-    })
+    return jsonify({"status": "ok", "model": DEFAULT_MODEL})
+
+
+
+
+@app.route("/")
+def serve_index():
+    return send_from_directory(".", "index.html")
+
+
+@app.route("/<path:filename>")
+def serve_static(filename):
+    return send_from_directory(".", filename)
 
 
 if __name__ == "__main__":
