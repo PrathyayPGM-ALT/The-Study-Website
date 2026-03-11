@@ -1,8 +1,12 @@
-
+// ════════════════════════════════════════════════════════════════════════
+// CONFIG - loaded from backend .env
+// ════════════════════════════════════════════════════════════════════════
 const API = '/api';
 let sb = null;
 
-
+// ════════════════════════════════════════════════════════════════════════
+// AUTH STATE
+// ════════════════════════════════════════════════════════════════════════
 let currentUser = null;
 let userProfile = null;
 
@@ -48,7 +52,9 @@ async function loadProfile(token) {
   } catch {}
 }
 
-
+// ════════════════════════════════════════════════════════════════════════
+// AUTH UI
+// ════════════════════════════════════════════════════════════════════════
 let authMode = 'login'; // 'login' | 'signup' | 'forgot'
 
 function showAuth() {
@@ -138,14 +144,26 @@ async function handleEmailAuth() {
 
   try {
     if (authMode === 'signup') {
-      const { error } = await sb.auth.signUp({
+      const { data, error } = await sb.auth.signUp({
         email, password,
-        options: { data: { full_name: name || '' } }
+        options: {
+          data: { full_name: name || '' },
+          emailRedirectTo: 'https://the-study-website.onrender.com'
+        }
       });
       if (error) throw error;
-      // Auto sign in after signup (no email verification required)
-      const { error: signInError } = await sb.auth.signInWithPassword({ email, password });
-      if (signInError) throw signInError;
+      if (data.user && !data.session) {
+        showAuthError('');
+        document.getElementById('auth-card-body').innerHTML = `
+          <div class="empty" style="padding:20px">
+            <div class="empty-icon">&#9993;</div>
+            <h3>Check your email</h3>
+            <p>We sent a confirmation link to <strong>${email}</strong>. Click it to activate your account.</p>
+            <br>
+            <a class="btn btn-secondary" onclick="authMode='login'; renderAuthForm()">Back to login</a>
+          </div>`;
+        return;
+      }
     } else {
       const { error } = await sb.auth.signInWithPassword({ email, password });
       if (error) throw error;
@@ -188,6 +206,9 @@ async function handleLogout() {
   await sb.auth.signOut();
 }
 
+// ════════════════════════════════════════════════════════════════════════
+// HELPERS
+// ════════════════════════════════════════════════════════════════════════
 function toast(msg, type = 'info') {
   const t = document.createElement('div');
   t.className = `toast ${type}`;
@@ -302,6 +323,9 @@ function getUserInitial() {
   return name.charAt(0).toUpperCase();
 }
 
+// ════════════════════════════════════════════════════════════════════════
+// APP STATE
+// ════════════════════════════════════════════════════════════════════════
 const state = {
   files: [],
   selectedFiles: new Set(),
@@ -312,6 +336,9 @@ const state = {
 
 let currentSection = 'home';
 
+// ════════════════════════════════════════════════════════════════════════
+// SIDEBAR
+// ════════════════════════════════════════════════════════════════════════
 function renderSidebar() {
   const avatar = userProfile?.avatar_url
     ? `<img src="${userProfile.avatar_url}" alt="" />`
@@ -356,7 +383,9 @@ function switchSection(name) {
   renders[name]();
 }
 
-
+// ════════════════════════════════════════════════════════════════════════
+// HOME PAGE
+// ════════════════════════════════════════════════════════════════════════
 async function renderHome() {
   const root = document.getElementById('content-root');
   const name = getUserDisplayName().split(' ')[0];
@@ -697,6 +726,9 @@ async function clearChatHistory() {
   toast('Chat history cleared', 'info');
 }
 
+// ════════════════════════════════════════════════════════════════════════
+// OUTPUT
+// ════════════════════════════════════════════════════════════════════════
 const OUTPUT_TYPES = [
   { key: 'summary', icon: '&#128203;', label: 'Summary' },
   { key: 'flashcards', icon: '&#127183;', label: 'Flashcards' },
@@ -953,6 +985,9 @@ function selectQuizAnswer(qi, oi) {
 function submitQuiz() { quizSubmitted = true; renderQuizUI(); }
 function retakeQuiz() { quizAnswers = {}; quizSubmitted = false; renderQuizUI(); }
 
+// ════════════════════════════════════════════════════════════════════════
+// CORNELL NOTES
+// ════════════════════════════════════════════════════════════════════════
 async function renderCornell() {
   const root = document.getElementById('content-root');
   root.innerHTML = `
@@ -1050,6 +1085,9 @@ function copyCornell() {
   navigator.clipboard.writeText(lastCornellText).then(() => toast('Copied to clipboard', 'success'));
 }
 
+// ════════════════════════════════════════════════════════════════════════
+// PLAYGROUND
+// ════════════════════════════════════════════════════════════════════════
 async function renderPlayground() {
   const root = document.getElementById('content-root');
   root.innerHTML = `
@@ -1151,7 +1189,9 @@ async function pgAsk(btn) {
   finally { btn.disabled = false; btn.innerHTML = origLabel; }
 }
 
-
+// ════════════════════════════════════════════════════════════════════════
+// STUDY CALENDAR + POMODORO
+// ════════════════════════════════════════════════════════════════════════
 const CAL_COLORS = [
   { name:'Blue', bg:'#DBEAFE', fg:'#1E40AF', dot:'#2563EB' },
   { name:'Red', bg:'#FEE2E2', fg:'#991B1B', dot:'#EF4444' },
@@ -1398,4 +1438,7 @@ function pomoRenderTime() {
   if (ring) { const total = pomo.phase === 'focus' ? pomo.focusMin * 60 : pomo.breakMin * 60; const pct = pomo.timeLeft / total; const circumference = 2 * Math.PI * 82; ring.setAttribute('stroke-dashoffset', String(circumference * (1 - pct))); ring.setAttribute('stroke', pomo.phase === 'focus' ? 'var(--blue)' : 'var(--green)'); }
 }
 
+// ════════════════════════════════════════════════════════════════════════
+// INIT
+// ════════════════════════════════════════════════════════════════════════
 initAuth();
