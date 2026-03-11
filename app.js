@@ -2,6 +2,7 @@
 const API = '/api';
 let sb = null;
 
+
 let currentUser = null;
 let userProfile = null;
 
@@ -137,23 +138,14 @@ async function handleEmailAuth() {
 
   try {
     if (authMode === 'signup') {
-      const { data, error } = await sb.auth.signUp({
+      const { error } = await sb.auth.signUp({
         email, password,
         options: { data: { full_name: name || '' } }
       });
       if (error) throw error;
-      if (data.user && !data.session) {
-        showAuthError('');
-        document.getElementById('auth-card-body').innerHTML = `
-          <div class="empty" style="padding:20px">
-            <div class="empty-icon">&#9993;</div>
-            <h3>Check your email</h3>
-            <p>We sent a confirmation link to <strong>${email}</strong>. Click it to activate your account.</p>
-            <br>
-            <a class="btn btn-secondary" onclick="authMode='login'; renderAuthForm()">Back to login</a>
-          </div>`;
-        return;
-      }
+      // Auto sign in after signup (no email verification required)
+      const { error: signInError } = await sb.auth.signInWithPassword({ email, password });
+      if (signInError) throw signInError;
     } else {
       const { error } = await sb.auth.signInWithPassword({ email, password });
       if (error) throw error;
@@ -168,7 +160,7 @@ async function handleEmailAuth() {
 async function handleGoogleAuth() {
   const { error } = await sb.auth.signInWithOAuth({
     provider: 'google',
-    options: { redirectTo: window.location.origin + window.location.pathname }
+    options: { redirectTo: 'https://the-study-website.onrender.com' }
   });
   if (error) showAuthError(error.message);
 }
@@ -178,7 +170,7 @@ async function handleForgotPassword() {
   if (!email) { showAuthError('Enter your email address'); return; }
 
   const { error } = await sb.auth.resetPasswordForEmail(email, {
-    redirectTo: window.location.origin + window.location.pathname
+    redirectTo: 'https://the-study-website.onrender.com'
   });
   if (error) { showAuthError(error.message); return; }
 
@@ -364,6 +356,7 @@ function switchSection(name) {
   renders[name]();
 }
 
+
 async function renderHome() {
   const root = document.getElementById('content-root');
   const name = getUserDisplayName().split(' ')[0];
@@ -438,6 +431,9 @@ async function renderHome() {
 }
 
 
+// ════════════════════════════════════════════════════════════════════════
+// FILES
+// ════════════════════════════════════════════════════════════════════════
 async function renderFiles() {
   const root = document.getElementById('content-root');
   root.innerHTML = `
@@ -573,7 +569,9 @@ async function deleteFile(e, id) {
   await loadFiles();
 }
 
-
+// ════════════════════════════════════════════════════════════════════════
+// CHAT
+// ════════════════════════════════════════════════════════════════════════
 async function renderChat() {
   const root = document.getElementById('content-root');
   root.innerHTML = `
@@ -954,7 +952,6 @@ function selectQuizAnswer(qi, oi) {
 
 function submitQuiz() { quizSubmitted = true; renderQuizUI(); }
 function retakeQuiz() { quizAnswers = {}; quizSubmitted = false; renderQuizUI(); }
-
 
 async function renderCornell() {
   const root = document.getElementById('content-root');
