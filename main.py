@@ -24,23 +24,23 @@ CORS(app)
 app.config["MAX_CONTENT_LENGTH"] = 16 * 1024 * 1024
 UPLOAD_FOLDER = Path("uploads")
 UPLOAD_FOLDER.mkdir(exist_ok=True)
+AVATARS_FOLDER = Path("uploads/avatars")
+AVATARS_FOLDER.mkdir(parents=True, exist_ok=True)
 ALLOWED_EXTENSIONS = {"pdf", "txt", "docx", "md"}
+ALLOWED_IMAGE_EXTENSIONS = {"jpg", "jpeg", "png", "gif", "webp"}
 
-# Groq AI client
 client = OpenAI(
     api_key=os.getenv("GROQ_API_KEY"),
     base_url="https://api.groq.com/openai/v1",
 )
 DEFAULT_MODEL = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
 
-# Supabase admin client (uses service role key for server-side operations)
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_SERVICE_KEY = os.getenv("SUPABASE_SERVICE_KEY")
 supabase = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
 
 
 def get_user_from_token():
-    """Extract and verify the user from the Authorization header."""
     auth_header = request.headers.get("Authorization", "")
     if not auth_header.startswith("Bearer "):
         return None
@@ -53,7 +53,6 @@ def get_user_from_token():
 
 
 def require_auth(f):
-    """Decorator that requires a valid Supabase JWT."""
     from functools import wraps
     @wraps(f)
     def decorated(*args, **kwargs):
@@ -106,7 +105,6 @@ def chat_completion(messages: list[dict], system: str = "") -> str:
     return response.choices[0].message.content
 
 
-
 @app.route("/api/me", methods=["GET"])
 @require_auth
 def get_me():
@@ -118,8 +116,53 @@ def get_me():
         "email": user.email,
         "full_name": profile.get("full_name", ""),
         "avatar_url": profile.get("avatar_url", ""),
+        "school_board": profile.get("school_board", ""),
+        "grade_major": profile.get("grade_major", ""),
+        "bio_message": profile.get("bio_message", ""),
     })
 
+
+@app.route("/api/me", methods=["PUT"])
+@require_auth
+def update_me():
+    user = request.user
+    body = request.get_json(silent=True) or {}
+    updates = {}
+    for field in ("full_name", "school_board", "grade_major", "bio_message"):
+        if field in body:
+            updates[field] = body[field]
+    if updates:
+        existing = supabase.table("profiles").select("id").eq("id", user.id).execute()
+        if existing.data:
+            supabase.table("profiles").update(updates).eq("id", user.id).execute()
+        else:
+            updates["id"] = user.id
+            supabase.table("profiles").insert(updates).execute()
+    return jsonify({"message": "Profile updated"})
+
+
+@app.route("/api/me/avatar", methods=["POST"])
+@require_auth
+def upload_avatar():
+    user = request.user
+    if "file" not in request.files:
+        return jsonify({"error": "No file provided"}), 400
+    file = request.files["file"]
+    if not file.filename:
+        return jsonify({"error": "No file selected"}), 400
+    ext = file.filename.rsplit(".", 1)[-1].lower() if "." in file.filename else "jpg"
+    if ext not in ALLOWED_IMAGE_EXTENSIONS:
+        return jsonify({"error": "Invalid image type. Use JPG, PNG, GIF or WebP"}), 400
+    filename = f"{user.id}.{ext}"
+    filepath = AVATARS_FOLDER / filename
+    file.save(filepath)
+    avatar_url = f"/uploads/avatars/{filename}"
+    existing = supabase.table("profiles").select("id").eq("id", user.id).execute()
+    if existing.data:
+        supabase.table("profiles").update({"avatar_url": avatar_url}).eq("id", user.id).execute()
+    else:
+        supabase.table("profiles").insert({"id": user.id, "avatar_url": avatar_url}).execute()
+    return jsonify({"avatar_url": avatar_url})
 
 
 @app.route("/api/files", methods=["GET"])
@@ -159,7 +202,6 @@ def upload_file():
 
     file_size = save_path.stat().st_size
 
-    # Store in Supabase
     supabase.table("files").insert({
         "id": file_id,
         "user_id": user.id,
@@ -169,7 +211,6 @@ def upload_file():
         "storage_path": str(save_path),
     }).execute()
 
-    # Clean up local file after extracting text
     save_path.unlink(missing_ok=True)
 
     return jsonify({
@@ -244,19 +285,16 @@ def send_message(session_id: str):
     if not user_message:
         return jsonify({"error": "Message is required"}), 400
 
-    # Get session
     session_result = supabase.table("chat_sessions").select("system_prompt").eq("id", session_id).eq("user_id", user.id).execute()
     if not session_result.data:
         return jsonify({"error": "Session not found"}), 404
 
     system_prompt = session_result.data[0]["system_prompt"]
 
-    # Get existing messages
     msgs_result = supabase.table("chat_messages").select("role, content").eq("session_id", session_id).order("created_at").execute()
     messages = [{"role": m["role"], "content": m["content"]} for m in (msgs_result.data or [])]
     messages.append({"role": "user", "content": user_message})
 
-    # Save user message
     supabase.table("chat_messages").insert({
         "session_id": session_id,
         "user_id": user.id,
@@ -269,7 +307,6 @@ def send_message(session_id: str):
     except Exception as exc:
         return jsonify({"error": str(exc)}), 502
 
-    # Save assistant message
     supabase.table("chat_messages").insert({
         "session_id": session_id,
         "user_id": user.id,
@@ -389,7 +426,6 @@ def delete_output(output_id: str):
     return jsonify({"message": "Output deleted"})
 
 
-
 CORNELL_SYSTEM = (
     "You are a study assistant that creates Cornell Notes. "
     "Given study material, produce structured notes in the Cornell Note-Taking Method. "
@@ -454,7 +490,6 @@ def generate_cornell():
     }).execute()
 
     return jsonify({"output_id": output_id, "cornell": cornell_data}), 201
-
 
 
 PLAYGROUND_SYSTEM = (
@@ -539,10 +574,8 @@ def playground_explain():
     return jsonify({"explanation": reply})
 
 
-
 @app.route("/api/config", methods=["GET"])
 def get_config():
-    """Return public Supabase config for the frontend."""
     return jsonify({
         "supabase_url": SUPABASE_URL,
         "supabase_anon_key": os.getenv("SUPABASE_ANON_KEY"),
