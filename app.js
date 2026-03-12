@@ -1,12 +1,6 @@
-// ════════════════════════════════════════════════════════════════════════
-// CONFIG - loaded from backend .env
-// ════════════════════════════════════════════════════════════════════════
 const API = '/api';
 let sb = null;
 
-// ════════════════════════════════════════════════════════════════════════
-// AUTH STATE
-// ════════════════════════════════════════════════════════════════════════
 let currentUser = null;
 let userProfile = null;
 
@@ -48,13 +42,12 @@ async function getToken() {
 async function loadProfile(token) {
   try {
     const r = await fetch(API + '/me', { headers: { 'Authorization': 'Bearer ' + token } });
-    if (r.ok) userProfile = await r.json();
+    if (r.ok) {
+      userProfile = await r.json();
+    }
   } catch {}
 }
 
-// ════════════════════════════════════════════════════════════════════════
-// AUTH UI
-// ════════════════════════════════════════════════════════════════════════
 let authMode = 'login'; // 'login' | 'signup' | 'forgot'
 
 function showAuth() {
@@ -206,9 +199,6 @@ async function handleLogout() {
   await sb.auth.signOut();
 }
 
-// ════════════════════════════════════════════════════════════════════════
-// HELPERS
-// ════════════════════════════════════════════════════════════════════════
 function toast(msg, type = 'info') {
   const t = document.createElement('div');
   t.className = `toast ${type}`;
@@ -323,9 +313,6 @@ function getUserInitial() {
   return name.charAt(0).toUpperCase();
 }
 
-// ════════════════════════════════════════════════════════════════════════
-// APP STATE
-// ════════════════════════════════════════════════════════════════════════
 const state = {
   files: [],
   selectedFiles: new Set(),
@@ -336,21 +323,19 @@ const state = {
 
 let currentSection = 'home';
 
-// ════════════════════════════════════════════════════════════════════════
-// SIDEBAR
-// ════════════════════════════════════════════════════════════════════════
 function renderSidebar() {
   const avatar = userProfile?.avatar_url
     ? `<img src="${userProfile.avatar_url}" alt="" />`
     : getUserInitial();
 
   document.getElementById('sidebar-user-area').innerHTML = `
-    <div class="sidebar-user">
+    <div class="sidebar-user" onclick="switchSection('settings')" style="cursor:pointer" title="Edit profile">
       <div class="sidebar-avatar">${avatar}</div>
-      <div style="min-width:0">
+      <div style="min-width:0;flex:1">
         <div class="sidebar-username">${escapeHtml(getUserDisplayName())}</div>
         <div class="sidebar-email">${escapeHtml(currentUser?.email || '')}</div>
       </div>
+      <span class="sidebar-settings-gear" title="Settings">&#9881;</span>
     </div>
     <button class="btn-logout" onclick="handleLogout()">Sign Out</button>`;
 }
@@ -368,6 +353,7 @@ function switchSection(name) {
     cornell:    ['Cornell Notes', 'Generate structured notes using the Cornell method'],
     calendar:   ['Study Calendar', 'Plan your study sessions with Pomodoro'],
     playground: ['Playground', 'Run code and explore ideas freely'],
+    settings:   ['Settings', 'Manage your profile and preferences'],
   };
   document.getElementById('topbar-title').textContent = titles[name][0];
   document.getElementById('topbar-sub').textContent = titles[name][1];
@@ -378,14 +364,12 @@ function switchSection(name) {
 
   const renders = {
     home: renderHome, files: renderFiles, chat: renderChat, output: renderOutput,
-    cornell: renderCornell, calendar: renderCalendar, playground: renderPlayground
+    cornell: renderCornell, calendar: renderCalendar, playground: renderPlayground,
+    settings: renderSettings,
   };
   renders[name]();
 }
 
-// ════════════════════════════════════════════════════════════════════════
-// HOME PAGE
-// ════════════════════════════════════════════════════════════════════════
 async function renderHome() {
   const root = document.getElementById('content-root');
   const name = getUserDisplayName().split(' ')[0];
@@ -446,7 +430,6 @@ async function renderHome() {
       </div>
     </div>`;
 
-  // Load stats
   try {
     const [files, outputs, sessions] = await Promise.all([
       api('/files'), api('/output'), api('/chat/sessions')
@@ -460,9 +443,6 @@ async function renderHome() {
 }
 
 
-// ════════════════════════════════════════════════════════════════════════
-// FILES
-// ════════════════════════════════════════════════════════════════════════
 async function renderFiles() {
   const root = document.getElementById('content-root');
   root.innerHTML = `
@@ -598,9 +578,6 @@ async function deleteFile(e, id) {
   await loadFiles();
 }
 
-// ════════════════════════════════════════════════════════════════════════
-// CHAT
-// ════════════════════════════════════════════════════════════════════════
 async function renderChat() {
   const root = document.getElementById('content-root');
   root.innerHTML = `
@@ -726,9 +703,6 @@ async function clearChatHistory() {
   toast('Chat history cleared', 'info');
 }
 
-// ════════════════════════════════════════════════════════════════════════
-// OUTPUT
-// ════════════════════════════════════════════════════════════════════════
 const OUTPUT_TYPES = [
   { key: 'summary', icon: '&#128203;', label: 'Summary' },
   { key: 'flashcards', icon: '&#127183;', label: 'Flashcards' },
@@ -895,7 +869,6 @@ async function deleteOutput(e, id) {
   loadSavedOutputs();
 }
 
-// ── Flashcards ──
 let fcData = [], fcIndex = 0, fcFlipped = false;
 
 function renderInteractiveFlashcards(content) {
@@ -932,7 +905,6 @@ function flipCard() { fcFlipped = !fcFlipped; renderFlashcardUI(); }
 function fcPrev() { if (fcIndex > 0) { fcIndex--; fcFlipped = false; renderFlashcardUI(); } }
 function fcNext() { if (fcIndex < fcData.length - 1) { fcIndex++; fcFlipped = false; renderFlashcardUI(); } }
 
-// ── Quiz ──
 let quizData = [], quizAnswers = {}, quizSubmitted = false;
 
 function renderInteractiveQuiz(content) {
@@ -985,9 +957,6 @@ function selectQuizAnswer(qi, oi) {
 function submitQuiz() { quizSubmitted = true; renderQuizUI(); }
 function retakeQuiz() { quizAnswers = {}; quizSubmitted = false; renderQuizUI(); }
 
-// ════════════════════════════════════════════════════════════════════════
-// CORNELL NOTES
-// ════════════════════════════════════════════════════════════════════════
 async function renderCornell() {
   const root = document.getElementById('content-root');
   root.innerHTML = `
@@ -1085,9 +1054,6 @@ function copyCornell() {
   navigator.clipboard.writeText(lastCornellText).then(() => toast('Copied to clipboard', 'success'));
 }
 
-// ════════════════════════════════════════════════════════════════════════
-// PLAYGROUND
-// ════════════════════════════════════════════════════════════════════════
 async function renderPlayground() {
   const root = document.getElementById('content-root');
   root.innerHTML = `
@@ -1189,9 +1155,6 @@ async function pgAsk(btn) {
   finally { btn.disabled = false; btn.innerHTML = origLabel; }
 }
 
-// ════════════════════════════════════════════════════════════════════════
-// STUDY CALENDAR + POMODORO
-// ════════════════════════════════════════════════════════════════════════
 const CAL_COLORS = [
   { name:'Blue', bg:'#DBEAFE', fg:'#1E40AF', dot:'#2563EB' },
   { name:'Red', bg:'#FEE2E2', fg:'#991B1B', dot:'#EF4444' },
@@ -1407,7 +1370,6 @@ function calSaveEvent(eventId) {
 
 function calDeleteEvent(id) { cal.events = cal.events.filter(e => e.id !== id); saveCalEvents(); renderCalendar(); toast('Session deleted', 'info'); }
 
-// ── Pomodoro Timer ──
 const pomo = { running: false, phase: 'focus', session: 1, totalSessions: 4, focusMin: 25, breakMin: 5, timeLeft: 25 * 60, interval: null };
 
 function pomoToggle() {
@@ -1438,7 +1400,113 @@ function pomoRenderTime() {
   if (ring) { const total = pomo.phase === 'focus' ? pomo.focusMin * 60 : pomo.breakMin * 60; const pct = pomo.timeLeft / total; const circumference = 2 * Math.PI * 82; ring.setAttribute('stroke-dashoffset', String(circumference * (1 - pct))); ring.setAttribute('stroke', pomo.phase === 'focus' ? 'var(--blue)' : 'var(--green)'); }
 }
 
-// ════════════════════════════════════════════════════════════════════════
-// INIT
-// ════════════════════════════════════════════════════════════════════════
+async function renderSettings() {
+  const root = document.getElementById('content-root');
+  const name = escapeHtml(userProfile?.full_name || getUserDisplayName());
+  const avatarUrl = userProfile?.avatar_url || '';
+  const schoolBoard = escapeHtml(userProfile?.school_board || '');
+  const gradeMajor = escapeHtml(userProfile?.grade_major || '');
+  const bio = escapeHtml(userProfile?.bio_message || '');
+
+  root.innerHTML = `
+    <div class="settings-page">
+      <div class="card">
+        <div class="card-header">
+          <span style="font-size:20px">&#128100;</span>
+          <span class="card-title">Profile Settings</span>
+        </div>
+        <div class="card-body">
+          <div class="settings-avatar-row">
+            <div class="settings-avatar-wrap">
+              <div class="settings-avatar-preview" id="settings-avatar-preview">
+                ${avatarUrl
+                  ? `<img src="${avatarUrl}" alt="" />`
+                  : `<span class="settings-avatar-initials">${getUserInitial()}</span>`}
+              </div>
+              <div class="settings-avatar-overlay" onclick="document.getElementById('avatar-file-input').click()">
+                &#128247;
+              </div>
+            </div>
+            <div style="flex:1">
+              <div class="font-semibold" style="margin-bottom:4px">Profile Photo</div>
+              <div class="text-xs text-muted" style="margin-bottom:10px">Click your avatar to upload a new photo (JPG, PNG, WebP)</div>
+              <input type="file" id="avatar-file-input" accept="image/jpeg,image/png,image/gif,image/webp" style="display:none" onchange="handleAvatarUpload(this)" />
+            </div>
+          </div>
+
+          <div class="settings-divider"></div>
+
+          <div class="field">
+            <label>Full Name</label>
+            <input class="input" id="settings-name" type="text" value="${name}" placeholder="Your full name" />
+          </div>
+          <div class="field">
+            <label>School Board</label>
+            <input class="input" id="settings-school-board" type="text" value="${schoolBoard}" placeholder="e.g. IB, AP, GCSE, Ontario Curriculum, CBSE..." />
+          </div>
+          <div class="field">
+            <label>Grade / College Major</label>
+            <input class="input" id="settings-grade-major" type="text" value="${gradeMajor}" placeholder="e.g. Grade 11, Computer Science, Pre-Med..." />
+          </div>
+          <div class="field">
+            <label>Your Vibe &#10024; <span class="text-muted" style="font-weight:400;font-size:12px">(a friendly or hilariously unhinged message about yourself)</span></label>
+            <textarea class="input" id="settings-bio" rows="3" placeholder="e.g. I run on caffeine and existential dread, but somehow pass my exams &#128517;">${bio}</textarea>
+          </div>
+
+          <div class="settings-actions">
+            <button class="btn btn-primary" id="btn-save-settings" onclick="saveSettings(this)">&#10003; Save Changes</button>
+          </div>
+        </div>
+      </div>
+    </div>`;
+}
+
+async function handleAvatarUpload(input) {
+  const file = input.files[0];
+  if (!file) return;
+  const token = await getToken();
+  const fd = new FormData();
+  fd.append('file', file);
+  try {
+    const r = await fetch(API + '/me/avatar', {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + token },
+      body: fd,
+    });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.error || 'Upload failed');
+    userProfile = { ...userProfile, avatar_url: data.avatar_url };
+    const preview = document.getElementById('settings-avatar-preview');
+    if (preview) preview.innerHTML = `<img src="${data.avatar_url}?t=${Date.now()}" alt="" />`;
+    renderSidebar();
+    toast('Profile picture updated', 'success');
+  } catch (e) {
+    toast(e.message, 'error');
+  }
+  input.value = '';
+}
+
+async function saveSettings(btn) {
+  const name = document.getElementById('settings-name')?.value.trim();
+  const schoolBoard = document.getElementById('settings-school-board')?.value.trim();
+  const gradeMajor = document.getElementById('settings-grade-major')?.value.trim();
+  const bioMessage = document.getElementById('settings-bio')?.value.trim();
+  const origLabel = btn.innerHTML;
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spin">&#10227;</span> Saving...';
+  try {
+    await api('/me', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ full_name: name, school_board: schoolBoard, grade_major: gradeMajor, bio_message: bioMessage }),
+    });
+    userProfile = { ...userProfile, full_name: name, school_board: schoolBoard, grade_major: gradeMajor, bio_message: bioMessage };
+    renderSidebar();
+    toast('Settings saved!', 'success');
+  } catch {} finally {
+    btn.disabled = false;
+    btn.innerHTML = origLabel;
+  }
+}
+
 initAuth();
