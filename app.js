@@ -5,8 +5,18 @@ let currentUser = null;
 let userProfile = null;
 
 async function loadConfig() {
+  const CACHE_KEY = 'tsw_config';
+  const cached = localStorage.getItem(CACHE_KEY);
+  if (cached) {
+    const config = JSON.parse(cached);
+    sb = supabase.createClient(config.supabase_url, config.supabase_anon_key);
+    // Refresh cache in background without blocking
+    fetch(API + '/config').then(r => r.json()).then(c => localStorage.setItem(CACHE_KEY, JSON.stringify(c))).catch(() => {});
+    return;
+  }
   const r = await fetch(API + '/config');
   const config = await r.json();
+  localStorage.setItem(CACHE_KEY, JSON.stringify(config));
   sb = supabase.createClient(config.supabase_url, config.supabase_anon_key);
 }
 
