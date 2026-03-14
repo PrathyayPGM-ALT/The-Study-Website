@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>StudyAI</title>
+  <title>The Study Website</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
@@ -12,23 +12,35 @@
 </head>
 <body>
 
-<!-- ═══════════ AUTH SCREEN ═══════════ -->
 <div id="auth-screen" class="auth-screen">
-  <div class="auth-card">
-    <div class="auth-logo">Study<span>AI</span></div>
-    <div class="auth-subtitle">Your AI-powered study companion</div>
-    <div class="auth-error" id="auth-error"></div>
-    <h2 id="auth-title" style="font-size:20px;margin-bottom:20px">Welcome back</h2>
-    <div class="auth-form" id="auth-card-body"></div>
+  <!-- Left: form panel -->
+  <div class="auth-left">
+    <div class="auth-content">
+      <div class="auth-logo">The Study <span>Website</span></div>
+      <h2 class="auth-welcome" id="auth-title">Welcome back</h2>
+      <p class="auth-welcome-sub">Sign in to your account</p>
+      <div class="auth-error" id="auth-error"></div>
+      <div class="auth-form" id="auth-card-body"></div>
+    </div>
+  </div>
+  <!-- Right: testimonial panel -->
+  <div class="auth-right">
+    <div class="auth-testimonial">
+      <div class="auth-quote-mark">&#8220;</div>
+      <p class="auth-quote-text" id="quote-text">I use it everytime for my exams!</p>
+      <div class="auth-quote-author">
+        <div class="auth-quote-avatar" id="quote-avatar">SR</div>
+        <span class="auth-quote-name" id="quote-name">Srikrish Raman</span>
+      </div>
+    </div>
   </div>
 </div>
 
-<!-- ═══════════ APP SCREEN ═══════════ -->
 <div id="app-screen" class="app hidden">
   <aside class="sidebar">
     <div class="sidebar-logo">
       <div class="logo-icon">&#10022;</div>
-      <div class="logo-text">Study<span>AI</span></div>
+      <div class="logo-text" style="font-size:13px">The Study <span>Website</span></div>
     </div>
 
     <span class="nav-label">Dashboard</span>
@@ -81,5 +93,29 @@
 <div id="toast-container"></div>
 
 <script src="app.js"></script>
+<script>
+  const _testimonials = [
+    { text: "I use it everytime for my exams!", name: "Srikrish Raman", initials: "SR" },
+    { text: "Cool", name: "Veer Dalal", initials: "VD" },
+    { text: "You should use this — it's awesome!", name: "My mom", initials: "MM" }
+  ];
+  let _tIdx = 0;
+  function _cycleTestimonial() {
+    _tIdx = (_tIdx + 1) % _testimonials.length;
+    const t = _testimonials[_tIdx];
+    const qt = document.getElementById('quote-text');
+    const qa = document.getElementById('quote-avatar');
+    const qn = document.getElementById('quote-name');
+    if (!qt) return;
+    qt.style.opacity = '0';
+    setTimeout(() => {
+      qt.textContent = t.text;
+      qa.textContent = t.initials;
+      qn.textContent = t.name;
+      qt.style.opacity = '1';
+    }, 350);
+  }
+  setInterval(_cycleTestimonial, 5000);
+</script>
 </body>
 </html>
