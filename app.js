@@ -387,54 +387,63 @@ async function renderHome() {
 
   root.innerHTML = `
     <div class="homepage">
-      <div class="homepage-greeting"><span class="greeting-word" id="greeting-word">${initialGreeting}</span>, <span class="greeting-name">${escapeHtml(name)}</span></div>
-      <div class="homepage-subtitle">What would you like to study today?</div>
+      <div class="home-greet"><span class="greeting-word" id="greeting-word">${initialGreeting}</span>, <span class="greeting-name">${escapeHtml(name)}</span></div>
+      <div class="home-sub">What would you like to study today?</div>
 
-      <div class="homepage-cards">
-        <div class="homepage-card" onclick="switchSection('files')">
-          <div class="hc-icon">&#128193;</div>
-          <div class="hc-title">Upload Notes</div>
-          <div class="hc-desc">Add PDF, DOCX, TXT, MD files</div>
-        </div>
-        <div class="homepage-card" onclick="switchSection('chat')">
-          <div class="hc-icon">&#128172;</div>
-          <div class="hc-title">Chat with AI</div>
-          <div class="hc-desc">Ask questions about your notes</div>
-        </div>
-        <div class="homepage-card" onclick="switchSection('output')">
-          <div class="hc-icon">&#128161;</div>
-          <div class="hc-title">Generate Output</div>
-          <div class="hc-desc">Summaries, flashcards, quizzes</div>
-        </div>
-        <div class="homepage-card" onclick="switchSection('cornell')">
-          <div class="hc-icon">&#128221;</div>
-          <div class="hc-title">Cornell Notes</div>
-          <div class="hc-desc">Structured note generation</div>
-        </div>
-        <div class="homepage-card" onclick="switchSection('calendar')">
-          <div class="hc-icon">&#128197;</div>
-          <div class="hc-title">Study Calendar</div>
-          <div class="hc-desc">Plan sessions & Pomodoro timer</div>
-        </div>
-        <div class="homepage-card" onclick="switchSection('playground')">
-          <div class="hc-icon">&#9889;</div>
-          <div class="hc-title">Playground</div>
-          <div class="hc-desc">Run code & explore ideas</div>
-        </div>
+      <div class="stat-chips">
+        <div class="stat-chip"><span class="schip-num" id="stat-files">—</span><span class="schip-lbl">files</span></div>
+        <div class="stat-chip"><span class="schip-num" id="stat-outputs">—</span><span class="schip-lbl">outputs</span></div>
+        <div class="stat-chip"><span class="schip-num" id="stat-chats">—</span><span class="schip-lbl">sessions</span></div>
       </div>
 
-      <div class="homepage-stats">
-        <div class="stat-card">
-          <div class="stat-num" id="stat-files">-</div>
-          <div class="stat-label">Files Uploaded</div>
+      <div class="bento-grid">
+        <div class="bento-card bento-hero bc-blue" onclick="switchSection('chat')">
+          <div class="bc-bg-icon">&#128172;</div>
+          <div class="bc-body">
+            <div class="bc-icon">&#128172;</div>
+            <div class="bc-title">Chat with AI</div>
+            <div class="bc-desc">Ask anything about your notes</div>
+          </div>
         </div>
-        <div class="stat-card">
-          <div class="stat-num" id="stat-outputs">-</div>
-          <div class="stat-label">Outputs Generated</div>
+        <div class="bento-card bc-amber" onclick="switchSection('files')">
+          <div class="bc-bg-icon">&#128193;</div>
+          <div class="bc-body">
+            <div class="bc-icon">&#128193;</div>
+            <div class="bc-title">Upload Notes</div>
+            <div class="bc-desc">PDF, DOCX, TXT, MD</div>
+          </div>
         </div>
-        <div class="stat-card">
-          <div class="stat-num" id="stat-chats">-</div>
-          <div class="stat-label">Chat Sessions</div>
+        <div class="bento-card bc-yellow" onclick="switchSection('output')">
+          <div class="bc-bg-icon">&#128161;</div>
+          <div class="bc-body">
+            <div class="bc-icon">&#128161;</div>
+            <div class="bc-title">Generate Output</div>
+            <div class="bc-desc">Summaries, flashcards, quizzes</div>
+          </div>
+        </div>
+        <div class="bento-card bc-orange" onclick="switchSection('cornell')">
+          <div class="bc-bg-icon">&#128221;</div>
+          <div class="bc-body">
+            <div class="bc-icon">&#128221;</div>
+            <div class="bc-title">Cornell Notes</div>
+            <div class="bc-desc">Structured note generation</div>
+          </div>
+        </div>
+        <div class="bento-card bc-green" onclick="switchSection('calendar')">
+          <div class="bc-bg-icon">&#128197;</div>
+          <div class="bc-body">
+            <div class="bc-icon">&#128197;</div>
+            <div class="bc-title">Study Calendar</div>
+            <div class="bc-desc">Sessions &amp; Pomodoro timer</div>
+          </div>
+        </div>
+        <div class="bento-card bc-violet" onclick="switchSection('playground')">
+          <div class="bc-bg-icon">&#9889;</div>
+          <div class="bc-body">
+            <div class="bc-icon">&#9889;</div>
+            <div class="bc-title">Playground</div>
+            <div class="bc-desc">Run code &amp; explore ideas</div>
+          </div>
         </div>
       </div>
     </div>`;
