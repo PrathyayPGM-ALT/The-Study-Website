@@ -574,6 +574,63 @@ def playground_explain():
     return jsonify({"explanation": reply})
 
 
+@app.route("/api/language/practice", methods=["POST"])
+@require_auth
+def language_practice():
+    body = request.get_json(silent=True) or {}
+    language = (body.get("language") or "Spanish").strip()
+    topic = (body.get("topic") or "").strip()
+    history = body.get("history") or []
+    user_message = (body.get("user_message") or "").strip()
+
+    file_ids = body.get("file_ids") or []
+
+    if not user_message:
+        return jsonify({"error": "user_message is required"}), 400
+
+    topic_context = f" The student is preparing for a speaking assignment about: {topic}." if topic else ""
+
+    speaking_bank_context = ""
+    if file_ids:
+        notes = build_notes_context(request.user.id, file_ids)
+        if notes.strip():
+            speaking_bank_context = (
+                f"\n\nThe student has provided the following speaking bank / reference material "
+                f"(vocabulary lists, sentence starters, sample phrases, notes, etc.). "
+                f"Use this to guide the conversation — encourage the student to use vocabulary "
+                f"and phrases from these materials, and reference them when giving feedback:\n\n{notes}"
+            )
+
+    system = (
+        f"You are a friendly and encouraging {language} language teacher helping a student "
+        f"practice for a speaking assignment.{topic_context}\n\n"
+        f"Your role:\n"
+        f"1. Respond primarily in {language} to give the student real practice.\n"
+        f"2. After the student speaks, gently point out any grammar or vocabulary errors "
+        f"in a kind way — you may use English briefly for corrections.\n"
+        f"3. Keep responses conversational and appropriate for a student.\n"
+        f"4. If the student writes in English, gently encourage them to try in {language} "
+        f"and model a helpful phrase they can use.\n"
+        f"5. Keep responses concise (2-4 sentences) so the conversation flows naturally.\n"
+        f"6. Ask a follow-up question to keep the conversation going.\n"
+        f"7. Be warm and encouraging — celebrate their effort and progress!"
+        f"{speaking_bank_context}"
+    )
+
+    messages = [{"role": "system", "content": system}]
+    for msg in history[-12:]:
+        if msg.get("role") in ("user", "assistant") and msg.get("content"):
+            messages.append({"role": msg["role"], "content": msg["content"]})
+    messages.append({"role": "user", "content": user_message})
+
+    try:
+        reply = chat_completion(messages[1:], system=system)
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 502
+
+    return jsonify({"reply": reply})
+
+
 @app.route("/api/config", methods=["GET"])
 def get_config():
     return jsonify({

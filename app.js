@@ -362,6 +362,7 @@ function switchSection(name) {
     cornell:    ['Cornell Notes', 'Generate structured notes using the Cornell method'],
     calendar:   ['Study Calendar', 'Plan your study sessions with Pomodoro'],
     playground: ['Playground', 'Run code and explore ideas freely'],
+    language:   ['Language Speaking', 'Practice foreign language speaking assignments'],
     settings:   ['Settings', 'Manage your profile and preferences'],
   };
   document.getElementById('topbar-title').textContent = titles[name][0];
@@ -374,7 +375,7 @@ function switchSection(name) {
   const renders = {
     home: renderHome, files: renderFiles, chat: renderChat, output: renderOutput,
     cornell: renderCornell, calendar: renderCalendar, playground: renderPlayground,
-    settings: renderSettings,
+    language: renderLanguagePractice, settings: renderSettings,
   };
   renders[name]();
 }
@@ -420,6 +421,11 @@ async function renderHome() {
           <div class="hc-icon">&#9889;</div>
           <div class="hc-title">Playground</div>
           <div class="hc-desc">Run code & explore ideas</div>
+        </div>
+        <div class="homepage-card" onclick="switchSection('language')">
+          <div class="hc-icon">&#127908;</div>
+          <div class="hc-title">Language Speaking</div>
+          <div class="hc-desc">Practice speaking assignments</div>
         </div>
       </div>
 
@@ -1516,6 +1522,285 @@ async function saveSettings(btn) {
     btn.disabled = false;
     btn.innerHTML = origLabel;
   }
+}
+
+const LP_LANGUAGES = [
+  { name: 'Spanish',              code: 'es-ES' },
+  { name: 'French',               code: 'fr-FR' },
+  { name: 'German',               code: 'de-DE' },
+  { name: 'Mandarin Chinese',     code: 'zh-CN' },
+  { name: 'Japanese',             code: 'ja-JP' },
+  { name: 'Italian',              code: 'it-IT' },
+  { name: 'Portuguese',           code: 'pt-BR' },
+  { name: 'Korean',               code: 'ko-KR' },
+  { name: 'Arabic',               code: 'ar-SA' },
+  { name: 'Hindi',                code: 'hi-IN' },
+  { name: 'Russian',              code: 'ru-RU' },
+];
+
+const lp = { history: [], isListening: false, isSpeaking: false, recognition: null, language: 'Spanish', langCode: 'es-ES', topic: '', selectedFiles: new Set() };
+
+function renderLanguagePractice() {
+  const root = document.getElementById('content-root');
+  const supported = !!(window.SpeechRecognition || window.webkitSpeechRecognition);
+
+  root.innerHTML = `
+    <div class="lp-layout">
+      <div class="lp-left">
+        <div class="card mb-4">
+          <div class="card-header">
+            <span style="font-size:20px">&#9881;&#65039;</span>
+            <span class="card-title">Setup</span>
+          </div>
+          <div class="card-body">
+            <div class="field">
+              <label>Target Language</label>
+              <select class="input" id="lp-lang-select" onchange="lpChangeLanguage(this.value)">
+                ${LP_LANGUAGES.map(l => `<option value="${l.code}" ${l.code === lp.langCode ? 'selected' : ''}>${l.name}</option>`).join('')}
+              </select>
+            </div>
+            <div class="field">
+              <label>Assignment Topic <span class="text-muted" style="font-weight:400;font-size:12px">(optional)</span></label>
+              <input class="input" id="lp-topic" type="text" placeholder="e.g. My daily routine, A trip I took, My family..." value="${escapeHtml(lp.topic)}" />
+            </div>
+            <div class="field" style="margin-bottom:0">
+              <label>Speaking Bank <span class="text-muted" style="font-weight:400;font-size:12px">(optional — select files with vocab, phrases, notes)</span></label>
+              <div id="lp-file-chips" style="display:flex;flex-wrap:wrap;gap:6px;margin-top:6px"></div>
+            </div>
+          </div>
+        </div>
+        ${!supported ? `<div class="card mb-4" style="border-color:#ca8a04"><div class="card-body"><p style="color:#ca8a04;font-size:13px;margin:0">&#9888;&#65039; Speech recognition requires Chrome or Edge. You can still type responses below.</p></div></div>` : ''}
+        <div class="card">
+          <div class="card-header">
+            <span style="font-size:20px">&#127908;</span>
+            <span class="card-title">Speak</span>
+          </div>
+          <div class="card-body">
+            <div class="lp-mic-area">
+              <button class="lp-mic-btn" id="lp-mic-btn" onclick="lpToggleMic()" ${!supported ? 'disabled' : ''}>
+                <span id="lp-mic-icon">&#127908;</span>
+              </button>
+              <div class="lp-status" id="lp-status">${supported ? 'Click the mic to start speaking' : 'Microphone not supported — use the text box below'}</div>
+            </div>
+            <div class="lp-transcript-box" id="lp-transcript-box" style="display:none">
+              <div class="text-xs text-muted" style="margin-bottom:4px">Heard:</div>
+              <div id="lp-transcript-text" style="font-style:italic;color:var(--text-2)"></div>
+            </div>
+            <div class="lp-or-divider">or type manually</div>
+            <div class="lp-type-row">
+              <input class="input" id="lp-type-input" type="text" placeholder="Type your response in ${lp.language}..." onkeydown="if(event.key==='Enter')lpSendTyped()" />
+              <button class="btn btn-primary" onclick="lpSendTyped()">&#9654;</button>
+            </div>
+          </div>
+        </div>
+        <div style="margin-top:12px">
+          <button class="btn btn-secondary w-full" onclick="lpResetConversation()">&#8634; New Conversation</button>
+        </div>
+      </div>
+      <div class="lp-right">
+        <div class="card lp-convo-card">
+          <div class="card-header">
+            <span style="font-size:20px">&#128172;</span>
+            <span class="card-title">Conversation</span>
+            <button class="btn btn-ghost btn-sm" style="margin-left:auto" id="lp-replay-btn" onclick="lpSpeakLast()" disabled>&#9654; Replay</button>
+          </div>
+          <div class="lp-conversation" id="lp-conversation">
+            <div class="lp-empty">
+              <div style="font-size:40px;margin-bottom:12px">&#127757;</div>
+              <div style="font-weight:500;margin-bottom:6px">Ready to practice!</div>
+              <div class="text-xs text-muted">Pick a language, describe your assignment (optional), then click the mic or type to start. The AI will respond in your target language and help coach you.</div>
+            </div>
+          </div>
+          <div id="lp-ai-typing" style="display:none;padding:12px 16px">
+            <div class="typing-indicator"><div class="typing-dot"></div><div class="typing-dot"></div><div class="typing-dot"></div></div>
+          </div>
+        </div>
+      </div>
+    </div>`;
+  lpRenderFileChips();
+}
+
+function lpChangeLanguage(code) {
+  const lang = LP_LANGUAGES.find(l => l.code === code);
+  if (lang) { lp.langCode = code; lp.language = lang.name; }
+  const inp = document.getElementById('lp-type-input');
+  if (inp) inp.placeholder = `Type your response in ${lp.language}...`;
+}
+
+function lpRenderFileChips() {
+  const chips = document.getElementById('lp-file-chips');
+  if (!chips) return;
+  if (state.files.length === 0) {
+    chips.innerHTML = `<span class="text-xs text-muted">No files uploaded yet — upload files in the Files section</span>`;
+    return;
+  }
+  chips.innerHTML = state.files.map(f => `
+    <div class="chip ${lp.selectedFiles.has(f.id) ? 'chip-blue' : 'chip-gray'}" style="cursor:pointer" onclick="lpToggleFile('${f.id}')">
+      ${fileIcon(f.filename)} ${f.filename.length > 20 ? f.filename.slice(0,17)+'...' : f.filename}
+      ${lp.selectedFiles.has(f.id) ? ' &#10003;' : ''}
+    </div>`).join('');
+}
+
+function lpToggleFile(id) {
+  if (lp.selectedFiles.has(id)) lp.selectedFiles.delete(id);
+  else lp.selectedFiles.add(id);
+  lpRenderFileChips();
+}
+
+function lpResetConversation() {
+  lp.history = [];
+  lpStopSpeaking();
+  lpStopListening();
+  const conv = document.getElementById('lp-conversation');
+  if (conv) conv.innerHTML = `<div class="lp-empty"><div style="font-size:40px;margin-bottom:12px">&#127757;</div><div style="font-weight:500;margin-bottom:6px">Ready to practice!</div><div class="text-xs text-muted">Pick a language, describe your assignment (optional), then click the mic or type to start.</div></div>`;
+  document.getElementById('lp-replay-btn')?.setAttribute('disabled', '');
+  toast('Conversation reset', 'info');
+}
+
+function lpToggleMic() {
+  if (lp.isListening) lpStopListening(); else lpStartListening();
+}
+
+function lpStartListening() {
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SR) { toast('Speech recognition not supported in this browser', 'error'); return; }
+  lpStopSpeaking();
+
+  lp.recognition = new SR();
+  lp.recognition.lang = lp.langCode;
+  lp.recognition.interimResults = true;
+  lp.recognition.maxAlternatives = 1;
+
+  lp.recognition.onstart = () => {
+    lp.isListening = true;
+    document.getElementById('lp-mic-btn')?.classList.add('listening');
+    const icon = document.getElementById('lp-mic-icon'); if (icon) icon.innerHTML = '&#9209;';
+    const status = document.getElementById('lp-status'); if (status) status.textContent = 'Listening… speak now';
+    const tbox = document.getElementById('lp-transcript-box'); if (tbox) tbox.style.display = 'block';
+  };
+
+  lp.recognition.onresult = (e) => {
+    const transcript = Array.from(e.results).map(r => r[0].transcript).join('');
+    const el = document.getElementById('lp-transcript-text'); if (el) el.textContent = transcript;
+  };
+
+  lp.recognition.onend = () => {
+    lp.isListening = false;
+    document.getElementById('lp-mic-btn')?.classList.remove('listening');
+    const icon = document.getElementById('lp-mic-icon'); if (icon) icon.innerHTML = '&#127908;';
+    const transcript = document.getElementById('lp-transcript-text')?.textContent?.trim();
+    const status = document.getElementById('lp-status');
+    if (transcript) {
+      if (status) status.textContent = 'Processing…';
+      lpSendMessage(transcript);
+    } else {
+      if (status) status.textContent = 'Click the mic to start speaking';
+      const tbox = document.getElementById('lp-transcript-box'); if (tbox) tbox.style.display = 'none';
+    }
+  };
+
+  lp.recognition.onerror = (e) => {
+    lp.isListening = false;
+    document.getElementById('lp-mic-btn')?.classList.remove('listening');
+    const icon = document.getElementById('lp-mic-icon'); if (icon) icon.innerHTML = '&#127908;';
+    const status = document.getElementById('lp-status');
+    const msgs = { 'no-speech': 'No speech detected. Try again.', 'not-allowed': 'Microphone access denied — check browser permissions.' };
+    if (status) status.textContent = msgs[e.error] || ('Error: ' + e.error);
+    const tbox = document.getElementById('lp-transcript-box'); if (tbox) tbox.style.display = 'none';
+  };
+
+  lp.recognition.start();
+}
+
+function lpStopListening() {
+  lp.recognition?.stop();
+  lp.recognition = null;
+  lp.isListening = false;
+  document.getElementById('lp-mic-btn')?.classList.remove('listening');
+  const icon = document.getElementById('lp-mic-icon'); if (icon) icon.innerHTML = '&#127908;';
+}
+
+function lpStopSpeaking() {
+  window.speechSynthesis?.cancel();
+  lp.isSpeaking = false;
+}
+
+function lpSendTyped() {
+  const inp = document.getElementById('lp-type-input');
+  const text = inp?.value.trim();
+  if (!text) return;
+  inp.value = '';
+  lpSendMessage(text);
+}
+
+async function lpSendMessage(userText) {
+  const topic = document.getElementById('lp-topic')?.value.trim() || '';
+  lp.topic = topic;
+
+  lpAddMessage('user', userText);
+  lp.history.push({ role: 'user', content: userText });
+
+  const typingEl = document.getElementById('lp-ai-typing');
+  if (typingEl) typingEl.style.display = 'block';
+  const status = document.getElementById('lp-status');
+  if (status) status.textContent = 'AI is thinking…';
+  const tbox = document.getElementById('lp-transcript-box');
+  if (tbox) tbox.style.display = 'none';
+  const textEl = document.getElementById('lp-transcript-text');
+  if (textEl) textEl.textContent = '';
+
+  try {
+    const data = await api('/language/practice', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ language: lp.language, topic, history: lp.history.slice(0, -1).slice(-12), user_message: userText, file_ids: [...lp.selectedFiles] }),
+    });
+    lp.history.push({ role: 'assistant', content: data.reply });
+    if (typingEl) typingEl.style.display = 'none';
+    lpAddMessage('ai', data.reply);
+    document.getElementById('lp-replay-btn')?.removeAttribute('disabled');
+    lpSpeak(data.reply);
+    if (status) status.textContent = 'Click the mic to respond';
+  } catch {
+    if (typingEl) typingEl.style.display = 'none';
+    if (status) status.textContent = 'Something went wrong. Try again.';
+    toast('Error getting AI response', 'error');
+  }
+}
+
+function lpAddMessage(role, content) {
+  const conv = document.getElementById('lp-conversation');
+  if (!conv) return;
+  conv.querySelector('.lp-empty')?.remove();
+  const div = document.createElement('div');
+  div.className = `msg ${role === 'user' ? 'user' : 'ai'} fade-in`;
+  div.innerHTML = `
+    <div class="msg-avatar">${role === 'user' ? '&#128100;' : '&#127757;'}</div>
+    <div>
+      <div class="msg-bubble${role !== 'user' ? ' md-prose' : ''}">${role === 'user' ? escapeHtml(content) : renderMarkdown(content)}</div>
+    </div>`;
+  conv.appendChild(div);
+  conv.scrollTop = conv.scrollHeight;
+}
+
+function lpSpeak(text) {
+  if (!window.speechSynthesis) return;
+  lpStopSpeaking();
+  const clean = text.replace(/[*_`#>~]/g, '').replace(/\[([^\]]+)\]\([^)]+\)/g, '$1');
+  const utt = new SpeechSynthesisUtterance(clean);
+  utt.lang = lp.langCode;
+  utt.rate = 0.9;
+  const voices = window.speechSynthesis.getVoices();
+  const match = voices.find(v => v.lang.startsWith(lp.langCode.split('-')[0]));
+  if (match) utt.voice = match;
+  lp.isSpeaking = true;
+  utt.onend = () => { lp.isSpeaking = false; };
+  window.speechSynthesis.speak(utt);
+}
+
+function lpSpeakLast() {
+  const last = [...lp.history].reverse().find(m => m.role === 'assistant');
+  if (last) lpSpeak(last.content);
 }
 
 initAuth();
