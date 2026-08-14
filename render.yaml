@@ -1,0 +1,32 @@
+# Render Blueprint for StudyAI (The Study Website)
+# Docs: https://render.com/docs/blueprint-spec
+#
+# Deploy: push this repo to GitHub, then in the Render dashboard choose
+# "New +" -> "Blueprint" and point it at the repo. Render reads this file,
+# creates the web service, and PROMPTS YOU to paste the secret values below
+# (the ones marked `sync: false`). Render never sees them until you enter them.
+
+services:
+  - type: web
+    name: studyai
+    runtime: python
+    plan: free
+    buildCommand: "pip install -r requirements.txt"
+    startCommand: "gunicorn main:app --bind 0.0.0.0:$PORT --timeout 120 --workers 2"
+    healthCheckPath: /api/health
+    autoDeploy: true
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.11.9"
+      # ── Secrets — Render will ask you to enter these in the dashboard ──
+      - key: GROQ_API_KEY
+        sync: false
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_ANON_KEY
+        sync: false
+      - key: SUPABASE_SERVICE_KEY
+        sync: false
+      # ── Non-secret, has a sensible default ──
+      - key: GROQ_MODEL
+        value: "llama-3.3-70b-versatile"

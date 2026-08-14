@@ -8,9 +8,21 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="styles.css" />
+  <script>
+    // Set theme before first paint to avoid a flash of the wrong theme.
+    (function () {
+      try {
+        var saved = localStorage.getItem('tsw_theme');
+        var theme = saved || (window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark');
+        document.documentElement.setAttribute('data-theme', theme);
+      } catch (e) { document.documentElement.setAttribute('data-theme', 'dark'); }
+    })();
+  </script>
   <script src="https://unpkg.com/@supabase/supabase-js@2"></script>
 </head>
 <body>
+
+<a href="#content-root" class="skip-link">Skip to main content</a>
 
 <div id="auth-screen" class="auth-screen">
   <!-- Left: form panel -->
@@ -37,43 +49,44 @@
 </div>
 
 <div id="app-screen" class="app hidden">
-  <aside class="sidebar">
+  <div class="nav-backdrop" onclick="toggleMobileNav(false)" aria-hidden="true"></div>
+  <aside class="sidebar" role="navigation" aria-label="Primary">
     <div class="sidebar-logo">
       <div class="logo-icon">&#10022;</div>
       <div class="logo-text" style="font-size:13px">The Study <span>Website</span></div>
     </div>
 
-    <span class="nav-label">Dashboard</span>
-    <div class="nav-item active" data-section="home" onclick="switchSection('home')">
-      <span class="nav-icon">&#127968;</span> Home
+    <span class="nav-label" id="nav-label-dashboard">Dashboard</span>
+    <div class="nav-item active" data-section="home" role="button" tabindex="0" aria-current="page" onclick="switchSection('home')">
+      <span class="nav-icon" aria-hidden="true">&#127968;</span> Home
     </div>
 
     <span class="nav-label">Workspace</span>
-    <div class="nav-item" data-section="files" onclick="switchSection('files')">
-      <span class="nav-icon">&#128193;</span> Files
-      <span class="nav-badge" id="badge-files">0</span>
+    <div class="nav-item" data-section="files" role="button" tabindex="0" onclick="switchSection('files')">
+      <span class="nav-icon" aria-hidden="true">&#128193;</span> Files
+      <span class="nav-badge" id="badge-files" aria-label="files uploaded">0</span>
     </div>
-    <div class="nav-item" data-section="chat" onclick="switchSection('chat')">
-      <span class="nav-icon">&#128172;</span> Chat
+    <div class="nav-item" data-section="chat" role="button" tabindex="0" onclick="switchSection('chat')">
+      <span class="nav-icon" aria-hidden="true">&#128172;</span> Chat
     </div>
 
     <span class="nav-label">Generate</span>
-    <div class="nav-item" data-section="output" onclick="switchSection('output')">
-      <span class="nav-icon">&#128196;</span> Output
+    <div class="nav-item" data-section="output" role="button" tabindex="0" onclick="switchSection('output')">
+      <span class="nav-icon" aria-hidden="true">&#128196;</span> Output
     </div>
-    <div class="nav-item" data-section="cornell" onclick="switchSection('cornell')">
-      <span class="nav-icon">&#128221;</span> Cornell Notes
+    <div class="nav-item" data-section="cornell" role="button" tabindex="0" onclick="switchSection('cornell')">
+      <span class="nav-icon" aria-hidden="true">&#128221;</span> Cornell Notes
     </div>
-    <div class="nav-item" data-section="calendar" onclick="switchSection('calendar')">
-      <span class="nav-icon">&#128197;</span> Study Calendar
+    <div class="nav-item" data-section="calendar" role="button" tabindex="0" onclick="switchSection('calendar')">
+      <span class="nav-icon" aria-hidden="true">&#128197;</span> Study Calendar
     </div>
-    <div class="nav-item" data-section="playground" onclick="switchSection('playground')">
-      <span class="nav-icon">&#9889;</span> Playground
+    <div class="nav-item" data-section="playground" role="button" tabindex="0" onclick="switchSection('playground')">
+      <span class="nav-icon" aria-hidden="true">&#9889;</span> Playground
     </div>
 
     <span class="nav-label">Practice</span>
-    <div class="nav-item" data-section="language" onclick="switchSection('language')">
-      <span class="nav-icon">&#127908;</span> Language Speaking
+    <div class="nav-item" data-section="language" role="button" tabindex="0" onclick="switchSection('language')">
+      <span class="nav-icon" aria-hidden="true">&#127908;</span> Language Speaking
     </div>
 
     <div class="sidebar-footer">
@@ -87,11 +100,16 @@
 
   <main class="main">
     <div class="topbar">
-      <span class="topbar-title" id="topbar-title">Home</span>
-      <span class="topbar-sub" id="topbar-sub">Your study dashboard</span>
+      <button class="icon-btn mobile-menu-btn" onclick="toggleMobileNav(true)" aria-label="Open navigation menu" data-tip="Menu" data-tip-below>&#9776;</button>
+      <div class="topbar-heading">
+        <span class="topbar-title" id="topbar-title">Home</span>
+        <span class="topbar-sub" id="topbar-sub">Your study dashboard</span>
+      </div>
       <div class="topbar-actions" id="topbar-actions"></div>
+      <button class="icon-btn" onclick="openShortcuts()" aria-label="Keyboard shortcuts" data-tip="Shortcuts (?)" data-tip-below>&#9000;</button>
+      <button class="icon-btn" id="theme-toggle" onclick="toggleTheme()" aria-label="Toggle light or dark theme" data-tip="Toggle theme" data-tip-below>&#9790;</button>
     </div>
-    <div class="content" id="content-root"></div>
+    <div class="content" id="content-root" tabindex="-1"></div>
   </main>
 </div>
 

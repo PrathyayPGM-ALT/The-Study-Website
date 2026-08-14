@@ -567,3 +567,213 @@ textarea.input { resize: vertical; min-height: 80px; }
 .lp-type-row .input { flex: 1; }
 
 @media (max-width: 900px) { .lp-layout { grid-template-columns: 1fr; } .lp-convo-card { height: 500px; } }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   REDESIGN v2 — Accessibility, theming, navigation clarity & onboarding
+   Everything below intentionally overrides earlier rules.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* ── Accessibility: visible focus, skip link, screen-reader helpers ───────── */
+:root { --focus-ring: 0 0 0 3px rgba(59,130,246,.45); --accent-grad: linear-gradient(135deg,#3B82F6,#2563EB); }
+
+*:focus { outline: none; }
+a:focus-visible,
+button:focus-visible,
+input:focus-visible,
+textarea:focus-visible,
+select:focus-visible,
+[tabindex]:focus-visible,
+.nav-item:focus-visible,
+.homepage-card:focus-visible,
+.type-card:focus-visible,
+.file-item:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+  border-radius: var(--radius-sm);
+}
+
+.sr-only {
+  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+  overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0;
+}
+.skip-link {
+  position: fixed; top: 8px; left: 8px; z-index: 10000;
+  background: var(--blue); color: #fff; padding: 10px 16px; border-radius: var(--radius-sm);
+  font-weight: 600; font-size: 13px; transform: translateY(-150%); transition: transform .18s ease;
+}
+.skip-link:focus { transform: translateY(0); }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: .001ms !important; animation-iteration-count: 1 !important;
+    transition-duration: .001ms !important; scroll-behavior: auto !important;
+  }
+}
+
+/* ── LIGHT THEME ──────────────────────────────────────────────────────────── */
+:root[data-theme="light"] {
+  --blue: #2563EB; --blue-light: #EAF1FE; --blue-mid: #3B82F6; --navy: #1E3A5F;
+  --bg: #ffffff; --surface: #f6f7f9; --surface2: #eceef2;
+  --border: #e4e7ec; --border2: #d3d8e0;
+  --text: #1a1d23; --text-2: #4a5160; --text-3: #8a92a3;
+  --green: #059669; --red: #DC2626; --yellow: #D97706;
+  --shadow: 0 1px 2px rgba(16,24,40,.06), 0 1px 3px rgba(16,24,40,.10);
+  --shadow-md: 0 8px 24px rgba(16,24,40,.12);
+  --focus-ring: 0 0 0 3px rgba(37,99,235,.35);
+}
+:root[data-theme="light"] body { background: #fbfcfd; }
+:root[data-theme="light"] .sidebar,
+:root[data-theme="light"] .topbar { background: #ffffff; }
+:root[data-theme="light"] .btn-logout { background: #FEF2F2 !important; color: #DC2626 !important; border: 1px solid #FECACA !important; }
+:root[data-theme="light"] .btn-logout:hover { background: #FEE2E2 !important; }
+:root[data-theme="light"] .btn-danger { background: #FEF2F2; color: #DC2626; border: 1px solid #FECACA; }
+:root[data-theme="light"] .btn-danger:hover { background: #FEE2E2; }
+:root[data-theme="light"] .quiz-option.correct { border-color: #22c55e; background: #dcfce7; color: #166534; }
+:root[data-theme="light"] .quiz-option.incorrect { border-color: #ef4444; background: #fee2e2; color: #991b1b; }
+:root[data-theme="light"] .cornell-page { background: #FFFDF7; border-color: #D4C9A8; }
+:root[data-theme="light"] .cornell-header { background: #F5F0E3; border-bottom-color: #C9B97A; color: #3E3517; }
+:root[data-theme="light"] .cornell-header .cornell-date { color: #8A7D5A; }
+:root[data-theme="light"] .cornell-cue-col { background: #FDFAF0; border-right-color: #C9B97A; }
+:root[data-theme="light"] .cornell-cue-item { background: #FFF8E7; border-left-color: #C9B97A; color: #5B4E2B; }
+:root[data-theme="light"] .cornell-note-item { color: #2D2A24; border-bottom-color: #E8DFC6; }
+:root[data-theme="light"] .cornell-summary { background: #F9F5E8; border-top-color: #C9B97A; color: #3E3517; }
+:root[data-theme="light"] .cornell-summary-label { color: #8A7D5A; }
+:root[data-theme="light"] .md-prose .md-inline-code { background: rgba(37,99,235,.08); border-color: var(--border); }
+:root[data-theme="light"] .toast { background: #1a1d23; }
+
+/* ── Topbar: theme toggle, mobile menu & shortcut controls ────────────────── */
+.topbar { gap: 12px; }
+.topbar-heading { display: flex; flex-direction: column; min-width: 0; line-height: 1.15; }
+.topbar-heading .topbar-title { font-size: 16px; font-weight: 700; }
+.topbar-heading .topbar-sub { margin-left: 0; font-size: 12.5px; }
+.icon-btn {
+  width: 38px; height: 38px; display: inline-flex; align-items: center; justify-content: center;
+  border-radius: var(--radius-sm); background: transparent; color: var(--text-2);
+  border: 1px solid transparent; font-size: 18px; transition: all var(--transition);
+}
+.icon-btn:hover { background: var(--surface); color: var(--text); border-color: var(--border); }
+.mobile-menu-btn { display: none; }
+
+/* ── Sidebar navigation: clearer active state & hierarchy ─────────────────── */
+.nav-item { position: relative; }
+.nav-item::before {
+  content: ''; position: absolute; left: -12px; top: 50%; transform: translateY(-50%) scaleY(0);
+  width: 3px; height: 20px; background: var(--blue); border-radius: 0 3px 3px 0;
+  transition: transform var(--transition);
+}
+.nav-item.active { background: var(--blue-light); color: var(--blue); font-weight: 600; }
+.nav-item.active::before { transform: translateY(-50%) scaleY(1); }
+.nav-item.active .nav-icon { transform: scale(1.05); }
+
+/* ── Tooltip (for icon-only / hint affordances) ───────────────────────────── */
+[data-tip] { position: relative; }
+[data-tip]::after {
+  content: attr(data-tip); position: absolute; bottom: calc(100% + 8px); left: 50%; transform: translateX(-50%);
+  background: var(--text); color: var(--bg); padding: 5px 9px; border-radius: 6px; font-size: 12px;
+  font-weight: 500; white-space: nowrap; opacity: 0; pointer-events: none; transition: opacity .15s ease;
+  z-index: 9998; box-shadow: var(--shadow-md);
+}
+[data-tip]:hover::after, [data-tip]:focus-visible::after { opacity: 1; }
+[data-tip-below]::after { bottom: auto; top: calc(100% + 8px); }
+
+/* ── Homepage redesign: iconed action cards + onboarding checklist ────────── */
+.homepage { max-width: 940px; }
+.homepage-card {
+  display: flex; flex-direction: column; align-items: flex-start; text-align: left;
+  gap: 4px; padding: 20px; background: var(--surface); position: relative; overflow: hidden;
+}
+.homepage-card .hc-icon {
+  width: 46px; height: 46px; border-radius: 12px; background: var(--blue-light); color: var(--blue);
+  display: flex; align-items: center; justify-content: center; font-size: 24px; margin-bottom: 8px;
+}
+.homepage-card .hc-desc { color: var(--text-2); }
+.homepage-card::after {
+  content: '\2192'; position: absolute; top: 18px; right: 18px; color: var(--text-3);
+  opacity: 0; transform: translateX(-4px); transition: all var(--transition); font-size: 16px;
+}
+.homepage-card:hover::after { opacity: 1; transform: translateX(0); color: var(--blue); }
+.homepage-section-label {
+  font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: .6px;
+  color: var(--text-3); margin: 4px 0 14px;
+}
+
+.onboard-card {
+  background: linear-gradient(135deg, var(--blue-light), var(--surface));
+  border: 1px solid var(--border); border-radius: var(--radius); padding: 20px 22px; margin-bottom: 28px;
+  position: relative; animation: greetSlideIn .7s cubic-bezier(0.22,1,0.36,1) both;
+}
+.onboard-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 6px; }
+.onboard-title { font-size: 16px; font-weight: 700; }
+.onboard-sub { font-size: 13px; color: var(--text-2); margin-bottom: 16px; }
+.onboard-dismiss {
+  background: transparent; color: var(--text-3); font-size: 20px; line-height: 1;
+  width: 28px; height: 28px; border-radius: 6px; flex-shrink: 0;
+}
+.onboard-dismiss:hover { background: var(--surface2); color: var(--text); }
+.onboard-steps { display: flex; flex-direction: column; gap: 4px; }
+.onboard-step {
+  display: flex; align-items: center; gap: 12px; padding: 10px 12px; border-radius: var(--radius-sm);
+  cursor: pointer; transition: background var(--transition); text-align: left; width: 100%; background: transparent;
+}
+.onboard-step:hover { background: rgba(255,255,255,.04); }
+:root[data-theme="light"] .onboard-step:hover { background: rgba(37,99,235,.06); }
+.onboard-check {
+  width: 22px; height: 22px; border-radius: 50%; border: 2px solid var(--border2); flex-shrink: 0;
+  display: flex; align-items: center; justify-content: center; font-size: 12px; color: #fff; transition: all var(--transition);
+}
+.onboard-step.done .onboard-check { background: var(--green); border-color: var(--green); }
+.onboard-step-text { font-size: 14px; font-weight: 500; flex: 1; }
+.onboard-step.done .onboard-step-text { color: var(--text-3); text-decoration: line-through; }
+.onboard-step-go { font-size: 12px; color: var(--blue); font-weight: 600; opacity: 0; transition: opacity var(--transition); }
+.onboard-step:hover .onboard-step-go { opacity: 1; }
+.onboard-progress-track { height: 6px; background: var(--surface2); border-radius: 99px; overflow: hidden; margin-bottom: 16px; }
+.onboard-progress-bar { height: 100%; background: var(--accent-grad); border-radius: 99px; transition: width .5s ease; }
+
+/* ── Richer empty states with a call-to-action ────────────────────────────── */
+.empty .empty-cta { margin-top: 16px; display: inline-flex; }
+.empty p { max-width: 340px; margin: 0 auto; }
+
+/* ── Keyboard shortcuts help modal ────────────────────────────────────────── */
+.kbd-overlay {
+  position: fixed; inset: 0; background: rgba(0,0,0,.5); z-index: 9500;
+  display: flex; align-items: center; justify-content: center; padding: 20px; animation: fadeIn .15s ease;
+}
+.kbd-modal { background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow-md); width: 440px; max-width: 100%; overflow: hidden; }
+.kbd-header { padding: 16px 20px; border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; }
+.kbd-header h3 { font-size: 15px; font-weight: 700; }
+.kbd-body { padding: 12px 20px 20px; }
+.kbd-row { display: flex; align-items: center; justify-content: space-between; padding: 9px 0; border-bottom: 1px solid var(--border); }
+.kbd-row:last-child { border-bottom: none; }
+.kbd-row span { font-size: 14px; color: var(--text-2); }
+.kbd-keys { display: flex; gap: 4px; }
+kbd {
+  font-family: 'JetBrains Mono', monospace; font-size: 12px; background: var(--surface2); color: var(--text);
+  border: 1px solid var(--border2); border-bottom-width: 2px; border-radius: 5px; padding: 2px 7px; min-width: 22px; text-align: center;
+}
+
+/* ── Mobile: slide-in sidebar drawer ──────────────────────────────────────── */
+.nav-backdrop {
+  position: fixed; inset: 0; background: rgba(0,0,0,.5); z-index: 800; opacity: 0;
+  pointer-events: none; transition: opacity .2s ease;
+}
+@media (max-width: 640px) {
+  .sidebar {
+    display: flex; position: fixed; top: 0; left: 0; bottom: 0; z-index: 900; width: 260px;
+    transform: translateX(-100%); transition: transform .25s cubic-bezier(0.22,1,0.36,1);
+    box-shadow: var(--shadow-md);
+  }
+  .app.nav-open .sidebar { transform: translateX(0); }
+  .app.nav-open .nav-backdrop { opacity: 1; pointer-events: auto; }
+  .mobile-menu-btn { display: inline-flex; }
+  .topbar { padding: 0 16px; }
+  .homepage-cards { grid-template-columns: 1fr; }
+  .homepage-stats { grid-template-columns: 1fr; }
+}
+@media (min-width: 641px) { .nav-backdrop { display: none; } }
+
+/* Larger, easier tap targets on touch devices */
+@media (hover: none) and (pointer: coarse) {
+  .nav-item { padding: 12px 10px; }
+  .btn { padding: 10px 18px; }
+  .btn-sm { padding: 8px 12px; }
+}

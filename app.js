@@ -352,8 +352,12 @@ function renderSidebar() {
 function switchSection(name) {
   currentSection = name;
   document.querySelectorAll('.nav-item').forEach(el => {
-    el.classList.toggle('active', el.dataset.section === name);
+    const isActive = el.dataset.section === name;
+    el.classList.toggle('active', isActive);
+    if (isActive) el.setAttribute('aria-current', 'page');
+    else el.removeAttribute('aria-current');
   });
+  toggleMobileNav(false); // close drawer after navigating on mobile
   const titles = {
     home:       ['Home', 'Your study dashboard'],
     files:      ['Files', 'Upload and manage your study notes'],
@@ -391,6 +395,9 @@ async function renderHome() {
       <div class="homepage-greeting"><span class="greeting-word" id="greeting-word">${initialGreeting}</span>, <span class="greeting-name">${escapeHtml(name)}</span></div>
       <div class="homepage-subtitle">What would you like to study today?</div>
 
+      <div id="onboard-slot"></div>
+
+      <div class="homepage-section-label">Quick actions</div>
       <div class="homepage-cards">
         <div class="homepage-card" onclick="switchSection('files')">
           <div class="hc-icon">&#128193;</div>
@@ -429,6 +436,7 @@ async function renderHome() {
         </div>
       </div>
 
+      <div class="homepage-section-label">Your activity</div>
       <div class="homepage-stats">
         <div class="stat-card">
           <div class="stat-num" id="stat-files">-</div>
@@ -449,12 +457,59 @@ async function renderHome() {
     const [files, outputs, sessions] = await Promise.all([
       api('/files'), api('/output'), api('/chat/sessions')
     ]);
-    document.getElementById('stat-files').textContent = (files.files || []).length;
-    document.getElementById('stat-outputs').textContent = (outputs.outputs || []).length;
-    document.getElementById('stat-chats').textContent = (sessions.sessions || []).length;
+    const fileCount = (files.files || []).length;
+    const outputCount = (outputs.outputs || []).length;
+    const chatCount = (sessions.sessions || []).length;
+    document.getElementById('stat-files').textContent = fileCount;
+    document.getElementById('stat-outputs').textContent = outputCount;
+    document.getElementById('stat-chats').textContent = chatCount;
     state.files = files.files || [];
     document.getElementById('badge-files').textContent = state.files.length;
+    renderOnboarding(fileCount, chatCount, outputCount);
   } catch {}
+}
+
+// First-run "getting started" checklist — guides new users to the core actions.
+function renderOnboarding(fileCount, chatCount, outputCount) {
+  const slot = document.getElementById('onboard-slot');
+  if (!slot) return;
+  if (localStorage.getItem('tsw_onboard_dismissed') === '1') { slot.innerHTML = ''; return; }
+
+  const steps = [
+    { done: fileCount > 0,   text: 'Upload your first study file',      section: 'files' },
+    { done: chatCount > 0,   text: 'Start a chat with the AI tutor',    section: 'chat' },
+    { done: outputCount > 0, text: 'Generate a summary, quiz or flashcards', section: 'output' },
+  ];
+  const doneCount = steps.filter(s => s.done).length;
+
+  // Auto-hide once everything is complete so it doesn't linger.
+  if (doneCount === steps.length) { slot.innerHTML = ''; return; }
+
+  const pct = Math.round((doneCount / steps.length) * 100);
+  slot.innerHTML = `
+    <div class="onboard-card">
+      <div class="onboard-head">
+        <div class="onboard-title">&#128075; Getting started</div>
+        <button class="onboard-dismiss" onclick="dismissOnboarding()" aria-label="Dismiss getting started guide" data-tip="Dismiss">&times;</button>
+      </div>
+      <div class="onboard-sub">${doneCount} of ${steps.length} done &mdash; finish these to get the most out of StudyAI.</div>
+      <div class="onboard-progress-track"><div class="onboard-progress-bar" style="width:${pct}%"></div></div>
+      <div class="onboard-steps">
+        ${steps.map(s => `
+          <button class="onboard-step ${s.done ? 'done' : ''}" onclick="switchSection('${s.section}')">
+            <span class="onboard-check">${s.done ? '&#10003;' : ''}</span>
+            <span class="onboard-step-text">${s.text}</span>
+            ${s.done ? '' : '<span class="onboard-step-go">Go &rarr;</span>'}
+          </button>`).join('')}
+      </div>
+    </div>`;
+}
+
+function dismissOnboarding() {
+  localStorage.setItem('tsw_onboard_dismissed', '1');
+  const slot = document.getElementById('onboard-slot');
+  if (slot) slot.innerHTML = '';
+  toast('You can always revisit features from the sidebar', 'info');
 }
 
 
@@ -551,7 +606,7 @@ function renderFileList() {
   if (!body) return;
 
   if (state.files.length === 0) {
-    body.innerHTML = `<div class="empty"><div class="empty-icon">&#128237;</div><h3>No files yet</h3><p>Upload notes to get started</p></div>`;
+    body.innerHTML = `<div class="empty"><div class="empty-icon">&#128237;</div><h3>No files yet</h3><p>Upload your lecture notes, PDFs or slides &mdash; then chat, quiz yourself, or generate summaries from them.</p><button class="btn btn-primary empty-cta" onclick="document.getElementById('file-input').click()">&#128228; Upload a file</button></div>`;
     if (info) info.style.display = 'none';
     const fc = document.getElementById('file-count');
     if (fc) fc.textContent = '0 files';
@@ -620,7 +675,7 @@ async function renderChat() {
     </div>
     <div class="card chat-wrap">
       <div class="chat-messages" id="chat-messages">
-        <div class="empty"><div class="empty-icon">&#128172;</div><h3>Start a conversation</h3><p>Create a new session and ask anything about your notes</p></div>
+        <div class="empty"><div class="empty-icon">&#128172;</div><h3>Start a conversation</h3><p>Attach notes above, start a session, then ask the AI to explain, quiz, or summarize them.</p><button class="btn btn-primary empty-cta" onclick="newChatSession(document.getElementById('btn-new-session'))">&#10022; New chat session</button></div>
       </div>
       <div class="chat-input-bar">
         <textarea id="chat-input" class="input" placeholder="Ask a question... (Enter to send, Shift+Enter for newline)" rows="1" onkeydown="chatKeydown(event)"></textarea>
@@ -1802,5 +1857,124 @@ function lpSpeakLast() {
   const last = [...lp.history].reverse().find(m => m.role === 'assistant');
   if (last) lpSpeak(last.content);
 }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   UX layer — theming, keyboard shortcuts, mobile nav & nav accessibility
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+// ── Theme ──────────────────────────────────────────────────────────────────
+function applyThemeIcon() {
+  const btn = document.getElementById('theme-toggle');
+  if (!btn) return;
+  const isLight = document.documentElement.getAttribute('data-theme') === 'light';
+  // Show the icon for the theme you'd switch TO.
+  btn.innerHTML = isLight ? '&#9789;' : '&#9788;'; // last-quarter moon / sun
+  btn.setAttribute('data-tip', isLight ? 'Switch to dark' : 'Switch to light');
+}
+
+function toggleTheme() {
+  const cur = document.documentElement.getAttribute('data-theme') === 'light' ? 'light' : 'dark';
+  const next = cur === 'light' ? 'dark' : 'light';
+  document.documentElement.setAttribute('data-theme', next);
+  try { localStorage.setItem('tsw_theme', next); } catch (e) {}
+  applyThemeIcon();
+}
+
+// ── Mobile navigation drawer ────────────────────────────────────────────────
+function toggleMobileNav(open) {
+  const app = document.getElementById('app-screen');
+  if (!app) return;
+  if (open === undefined) open = !app.classList.contains('nav-open');
+  app.classList.toggle('nav-open', open);
+}
+
+// ── Keyboard shortcuts help modal ───────────────────────────────────────────
+const SHORTCUTS = [
+  { keys: ['1'], label: 'Go to Home' },
+  { keys: ['2'], label: 'Go to Files' },
+  { keys: ['3'], label: 'Go to Chat' },
+  { keys: ['4'], label: 'Go to Output' },
+  { keys: ['5'], label: 'Go to Cornell Notes' },
+  { keys: ['6'], label: 'Go to Study Calendar' },
+  { keys: ['7'], label: 'Go to Playground' },
+  { keys: ['8'], label: 'Go to Language Speaking' },
+  { keys: ['T'], label: 'Toggle light / dark theme' },
+  { keys: ['?'], label: 'Show this help' },
+  { keys: ['Esc'], label: 'Close dialogs' },
+];
+
+function openShortcuts() {
+  if (document.getElementById('kbd-overlay')) return;
+  const overlay = document.createElement('div');
+  overlay.className = 'kbd-overlay';
+  overlay.id = 'kbd-overlay';
+  overlay.setAttribute('role', 'dialog');
+  overlay.setAttribute('aria-modal', 'true');
+  overlay.setAttribute('aria-label', 'Keyboard shortcuts');
+  overlay.onclick = (e) => { if (e.target === overlay) closeShortcuts(); };
+  overlay.innerHTML = `
+    <div class="kbd-modal">
+      <div class="kbd-header">
+        <h3>&#9000; Keyboard shortcuts</h3>
+        <button class="icon-btn" onclick="closeShortcuts()" aria-label="Close">&times;</button>
+      </div>
+      <div class="kbd-body">
+        ${SHORTCUTS.map(s => `
+          <div class="kbd-row">
+            <span>${s.label}</span>
+            <span class="kbd-keys">${s.keys.map(k => `<kbd>${k}</kbd>`).join('')}</span>
+          </div>`).join('')}
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+}
+
+function closeShortcuts() {
+  const o = document.getElementById('kbd-overlay');
+  if (o) o.remove();
+}
+
+// ── Global keyboard handling ────────────────────────────────────────────────
+const _navKeyMap = {
+  '1': 'home', '2': 'files', '3': 'chat', '4': 'output',
+  '5': 'cornell', '6': 'calendar', '7': 'playground', '8': 'language',
+};
+
+function _isTyping(el) {
+  if (!el) return false;
+  const tag = el.tagName;
+  return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || el.isContentEditable;
+}
+
+document.addEventListener('keydown', (e) => {
+  // Escape always closes the lightest open surface first.
+  if (e.key === 'Escape') {
+    if (document.getElementById('kbd-overlay')) { closeShortcuts(); return; }
+    const app = document.getElementById('app-screen');
+    if (app && app.classList.contains('nav-open')) { toggleMobileNav(false); return; }
+    return;
+  }
+
+  // Ignore shortcuts while typing, using modifiers, or on the auth screen.
+  if (_isTyping(e.target) || e.metaKey || e.ctrlKey || e.altKey) return;
+  const appScreen = document.getElementById('app-screen');
+  if (!appScreen || appScreen.classList.contains('hidden')) return;
+
+  if (e.key === '?') { e.preventDefault(); openShortcuts(); return; }
+  if (e.key === 't' || e.key === 'T') { e.preventDefault(); toggleTheme(); return; }
+  if (_navKeyMap[e.key]) { e.preventDefault(); switchSection(_navKeyMap[e.key]); }
+});
+
+// ── Sidebar nav keyboard activation (Enter / Space on role=button divs) ─────
+document.addEventListener('keydown', (e) => {
+  const item = e.target.closest && e.target.closest('.nav-item');
+  if (!item) return;
+  if (e.key === 'Enter' || e.key === ' ' || e.key === 'Spacebar') {
+    e.preventDefault();
+    item.click();
+  }
+});
+
+applyThemeIcon();
 
 initAuth();
