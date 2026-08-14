@@ -1,14 +1,17 @@
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 :root {
-  --blue: #3B82F6; --blue-light: #1a2942; --blue-mid: #1e40af; --navy: #1E3A5F;
-  --bg: #0a0a0a; --surface: #161616; --surface2: #1e1e1e;
-  --border: #2a2a2a; --border2: #3a3a3a;
-  --text: #fafafa; --text-2: #a1a1aa; --text-3: #52525b;
-  --green: #10B981; --red: #EF4444; --yellow: #F59E0B;
-  --radius: 12px; --radius-sm: 8px;
-  --shadow: 0 1px 3px rgba(0,0,0,.4), 0 1px 2px rgba(0,0,0,.3);
-  --shadow-md: 0 4px 16px rgba(0,0,0,.5);
-  --sidebar-w: 240px; --header-h: 60px; --transition: .18s ease;
+  /* Warm & cozy — DARK (default). Honey-amber primary on coffee-brown surfaces. */
+  --blue: #E3A85B; --blue-light: #3A2C1B; --blue-mid: #CE9040; --navy: #4B3927;
+  --clay: #D77E56; --honey: #E3A85B;
+  --bg: #1A1512; --surface: #231C16; --surface2: #2E251C;
+  --border: #382C21; --border2: #4A3A2B;
+  --text: #F4EBDC; --text-2: #C1AF95; --text-3: #8E7C64;
+  --green: #9BBA6E; --red: #E37E62; --yellow: #E9BB60;
+  --radius: 16px; --radius-sm: 11px;
+  --shadow: 0 2px 6px rgba(0,0,0,.35), 0 1px 2px rgba(0,0,0,.30);
+  --shadow-md: 0 12px 34px rgba(20,12,4,.55), 0 4px 12px rgba(20,12,4,.35);
+  --sidebar-w: 250px; --header-h: 64px; --transition: .18s ease;
+  --font-display: 'Fraunces', 'Georgia', serif;
 }
 html, body { height: 100%; font-family: 'Inter', system-ui, sans-serif; background: var(--bg); color: var(--text); font-size: 14px; line-height: 1.5; }
 button { cursor: pointer; font-family: inherit; font-size: 14px; border: none; outline: none; }
@@ -612,18 +615,20 @@ select:focus-visible,
 
 /* ── LIGHT THEME ──────────────────────────────────────────────────────────── */
 :root[data-theme="light"] {
-  --blue: #2563EB; --blue-light: #EAF1FE; --blue-mid: #3B82F6; --navy: #1E3A5F;
-  --bg: #ffffff; --surface: #f6f7f9; --surface2: #eceef2;
-  --border: #e4e7ec; --border2: #d3d8e0;
-  --text: #1a1d23; --text-2: #4a5160; --text-3: #8a92a3;
-  --green: #059669; --red: #DC2626; --yellow: #D97706;
-  --shadow: 0 1px 2px rgba(16,24,40,.06), 0 1px 3px rgba(16,24,40,.10);
-  --shadow-md: 0 8px 24px rgba(16,24,40,.12);
-  --focus-ring: 0 0 0 3px rgba(37,99,235,.35);
+  /* Warm & cozy — LIGHT (cream paper). Deeper amber for contrast on warm white. */
+  --blue: #B26E2C; --blue-light: #F5E6CC; --blue-mid: #9C5F24; --navy: #6E5236;
+  --clay: #C06B44; --honey: #C88A34;
+  --bg: #FAF4E9; --surface: #FFFDF7; --surface2: #F2E7D5;
+  --border: #E8DAC1; --border2: #D8C6A8;
+  --text: #3A3128; --text-2: #6D5F4E; --text-3: #9C8B73;
+  --green: #5F7E3C; --red: #C4573A; --yellow: #C0872C;
+  --shadow: 0 2px 5px rgba(120,90,50,.10), 0 1px 2px rgba(120,90,50,.08);
+  --shadow-md: 0 14px 34px rgba(120,85,40,.16), 0 4px 12px rgba(120,85,40,.10);
+  --focus-ring: 0 0 0 3px rgba(178,110,44,.35);
 }
-:root[data-theme="light"] body { background: #fbfcfd; }
-:root[data-theme="light"] .sidebar,
-:root[data-theme="light"] .topbar { background: #ffffff; }
+:root[data-theme="light"] body { background: #F6EFDF; }
+:root[data-theme="light"] .sidebar { background: #FFFDF7; }
+:root[data-theme="light"] .topbar { background: rgba(255,253,247,.85); }
 :root[data-theme="light"] .btn-logout { background: #FEF2F2 !important; color: #DC2626 !important; border: 1px solid #FECACA !important; }
 :root[data-theme="light"] .btn-logout:hover { background: #FEE2E2 !important; }
 :root[data-theme="light"] .btn-danger { background: #FEF2F2; color: #DC2626; border: 1px solid #FECACA; }
@@ -777,3 +782,170 @@ kbd {
   .btn { padding: 10px 18px; }
   .btn-sm { padding: 8px 12px; }
 }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   WARM & COZY — full visual language (shape · type · texture · components)
+   Recolored via tokens above; this layer restyles FORM. All class hooks kept.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* ── Foundations: warm textured backdrop + cozy serif headings ────────────── */
+body {
+  background:
+    radial-gradient(1200px 620px at 82% -8%, rgba(227,168,91,.10), transparent 60%),
+    radial-gradient(900px 520px at -6% 108%, rgba(215,126,86,.09), transparent 60%),
+    var(--bg);
+  background-attachment: fixed;
+}
+:root[data-theme="light"] body {
+  background:
+    radial-gradient(1200px 620px at 82% -8%, rgba(200,138,52,.14), transparent 60%),
+    radial-gradient(900px 520px at -6% 108%, rgba(192,107,68,.10), transparent 60%),
+    #F6EFDF;
+  background-attachment: fixed;
+}
+h1, h2, h3, .card-title, .topbar-title, .auth-welcome, .auth-logo,
+.homepage-greeting, .cal-title, .pomo-time, .stat-num, .quiz-score .score-num {
+  font-family: var(--font-display);
+  letter-spacing: -0.01em;
+}
+.homepage-greeting { font-weight: 600; font-size: 34px; }
+.auth-logo, .logo-text { font-family: var(--font-display); }
+
+/* ── Buttons: pill-shaped, warm amber primary with readable dark ink ──────── */
+.btn { border-radius: 999px; padding: 10px 20px; font-weight: 600; letter-spacing: .01em; }
+.btn-sm { border-radius: 999px; padding: 6px 13px; }
+.btn-primary {
+  background: linear-gradient(135deg, var(--honey), var(--blue-mid));
+  color: #2A2013; box-shadow: 0 4px 14px rgba(206,144,64,.35);
+}
+.btn-primary:hover {
+  background: linear-gradient(135deg, #EDB86E, var(--honey));
+  box-shadow: 0 6px 20px rgba(206,144,64,.45); transform: translateY(-1px);
+}
+.btn-secondary { background: var(--surface2); color: var(--text); border: 1px solid var(--border2); }
+.btn-secondary:hover { background: var(--border); border-color: var(--border2); }
+.btn-ghost { color: var(--text-2); }
+.btn-ghost:hover { background: var(--surface2); color: var(--text); }
+
+/* ── Cards & surfaces: rounder, softer, warmer ────────────────────────────── */
+.card {
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+  box-shadow: var(--shadow);
+}
+.card-header, .card-footer { border-color: var(--border); }
+.card-title { font-size: 16px; }
+.input, .auth-form .input, .chat-input-bar textarea {
+  border-radius: var(--radius-sm); background: var(--surface); border: 1.5px solid var(--border);
+}
+.input:focus, .auth-form .input:focus, .chat-input-bar textarea:focus {
+  border-color: var(--honey); box-shadow: 0 0 0 3px rgba(227,168,91,.22); background: var(--bg);
+}
+
+/* ── Sidebar: cozy rail, pill nav, glowing active state ───────────────────── */
+.sidebar { background: linear-gradient(180deg, var(--surface), var(--bg)); border-right: 1px solid var(--border); }
+.logo-icon {
+  background: linear-gradient(135deg, var(--honey), var(--clay)); color: #2A2013;
+  border-radius: 12px; box-shadow: 0 3px 10px rgba(215,126,86,.4);
+}
+.logo-text span, .auth-logo span, .homepage-greeting .greeting-name,
+.greeting-name, .stat-num, .auth-switch a, .forgot-link { color: var(--honey); }
+.nav-item { border-radius: 999px; padding: 10px 14px; font-weight: 500; }
+.nav-item::before { display: none; }
+.nav-item:hover { background: var(--surface2); color: var(--text); }
+.nav-item.active {
+  background: linear-gradient(135deg, rgba(227,168,91,.18), rgba(215,126,86,.12));
+  color: var(--honey); font-weight: 600; box-shadow: inset 0 0 0 1px rgba(227,168,91,.28);
+}
+.nav-badge { background: var(--honey); color: #2A2013; }
+.sidebar-avatar { background: linear-gradient(135deg, rgba(227,168,91,.25), rgba(215,126,86,.18)); color: var(--honey); }
+.status-dot { box-shadow: 0 0 0 3px rgba(155,186,110,.18); }
+
+/* ── Topbar: sticky, softly translucent ───────────────────────────────────── */
+.topbar {
+  background: color-mix(in srgb, var(--bg) 82%, transparent);
+  backdrop-filter: saturate(140%) blur(10px); border-bottom: 1px solid var(--border);
+}
+.topbar-title { font-size: 18px; }
+
+/* ── Homepage: warm hero cards with colourful icon tiles ──────────────────── */
+.homepage { max-width: 960px; }
+.homepage-card {
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+  padding: 22px; box-shadow: var(--shadow);
+}
+.homepage-card:hover { border-color: var(--border2); box-shadow: var(--shadow-md); transform: translateY(-3px); }
+.homepage-card .hc-icon {
+  width: 50px; height: 50px; border-radius: 14px; font-size: 25px;
+  display: flex; align-items: center; justify-content: center; margin-bottom: 10px;
+  background: linear-gradient(135deg, rgba(227,168,91,.22), rgba(215,126,86,.16)); color: var(--honey);
+}
+.homepage-card:nth-child(2) .hc-icon { background: linear-gradient(135deg, rgba(215,126,86,.22), rgba(196,87,58,.16)); color: var(--clay); }
+.homepage-card:nth-child(3) .hc-icon { background: linear-gradient(135deg, rgba(155,186,110,.22), rgba(120,150,80,.16)); color: var(--green); }
+.homepage-card:nth-child(4) .hc-icon { background: linear-gradient(135deg, rgba(233,187,96,.24), rgba(206,144,64,.16)); color: var(--yellow); }
+.homepage-card:nth-child(5) .hc-icon { background: linear-gradient(135deg, rgba(215,126,86,.20), rgba(227,168,91,.16)); color: var(--clay); }
+.homepage-card:nth-child(6) .hc-icon { background: linear-gradient(135deg, rgba(227,168,91,.22), rgba(155,186,110,.14)); color: var(--honey); }
+.homepage-card:nth-child(7) .hc-icon { background: linear-gradient(135deg, rgba(196,87,58,.22), rgba(215,126,86,.14)); color: var(--clay); }
+.stat-card {
+  background: linear-gradient(160deg, var(--surface2), var(--surface));
+  border: 1px solid var(--border); border-radius: var(--radius);
+}
+.stat-num { font-size: 34px; }
+
+/* ── Chat: cozy speech bubbles ────────────────────────────────────────────── */
+.msg.ai .msg-bubble { background: var(--surface); border: 1px solid var(--border); border-radius: 4px 16px 16px 16px; }
+.msg.user .msg-bubble { background: linear-gradient(135deg, var(--navy), #5A4531); color: var(--text); border-radius: 16px 4px 16px 16px; }
+.msg.ai .msg-avatar { background: linear-gradient(135deg, rgba(227,168,91,.25), rgba(215,126,86,.18)); color: var(--honey); }
+.msg.user .msg-avatar { background: linear-gradient(135deg, var(--navy), #5A4531); color: var(--text); }
+.chat-input-bar { background: var(--surface); }
+
+/* ── Selection / type cards / flashcards / upload ─────────────────────────── */
+.upload-zone { border: 2px dashed var(--border2); border-radius: var(--radius); background: var(--surface); }
+.upload-zone:hover, .upload-zone.drag { border-color: var(--honey); background: var(--blue-light); }
+.file-item { border-radius: var(--radius-sm); }
+.file-item.selected, .type-card.selected, .quiz-option.selected { border-color: var(--honey); background: var(--blue-light); }
+.type-card { border-radius: var(--radius-sm); }
+.type-card:hover { border-color: var(--blue-mid); background: var(--blue-light); }
+.fc-back { background: var(--blue-light); border-color: var(--honey); }
+.chip-blue { background: var(--blue-light); color: var(--honey); }
+
+/* ── Code surfaces: warm espresso instead of cold navy ────────────────────── */
+.code-editor, .run-output, .md-prose .md-pre {
+  background: #1E1710; color: #EFE3D0; border-color: var(--border2);
+}
+.code-editor:focus { border-color: var(--honey); box-shadow: 0 0 0 3px rgba(227,168,91,.2); }
+.run-output { color: #B7CE92; }
+.run-output .exit-code { color: var(--text-3); border-top-color: var(--border); }
+.pomo-time { letter-spacing: 3px; }
+
+/* ── Toasts: warm, rounded ────────────────────────────────────────────────── */
+.toast { border-radius: 999px; }
+.toast.success { background: #3C4A26; }
+.toast.error { background: #5A2A1E; }
+.toast.info { background: #4B3927; }
+
+/* ── Onboarding & empty states in warm tones ──────────────────────────────── */
+.onboard-card { background: linear-gradient(135deg, rgba(227,168,91,.14), var(--surface)); border-color: var(--border); }
+.onboard-progress-bar { background: linear-gradient(135deg, var(--honey), var(--clay)); }
+.onboard-step.done .onboard-check { background: var(--green); border-color: var(--green); color: #23300F; }
+.onboard-step-go { color: var(--honey); }
+
+/* ── Auth screen: a warm, welcoming split ─────────────────────────────────── */
+.auth-right {
+  background:
+    radial-gradient(700px 500px at 70% 20%, rgba(227,168,91,.16), transparent 60%),
+    radial-gradient(600px 500px at 20% 90%, rgba(215,126,86,.14), transparent 60%),
+    var(--surface);
+  border-left: 1px solid var(--border);
+}
+.auth-quote-text { font-family: var(--font-display); font-weight: 500; }
+.auth-quote-mark { color: var(--honey); opacity: .5; }
+.auth-quote-avatar { background: var(--blue-light); color: var(--honey); border-color: var(--border2); }
+.auth-left { border-right: none; }
+.auth-welcome { font-size: 26px; }
+
+/* ── Warm focus ring ──────────────────────────────────────────────────────── */
+:root { --focus-ring: 0 0 0 3px rgba(227,168,91,.4); }
+
+/* ── Scrollbar ────────────────────────────────────────────────────────────── */
+::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 99px; }
+::-webkit-scrollbar-thumb:hover { background: var(--honey); }
