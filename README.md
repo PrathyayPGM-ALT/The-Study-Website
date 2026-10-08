@@ -15,7 +15,7 @@ Login and signup powered by Supabase. Your study data is tied to your account, s
 Upload your study materials in **PDF, DOCX, TXT, or Markdown** format (up to 16MB). The backend extracts the text so the AI can actually read it — which is more than can be said for most students the night before an exam.
 
 ### 💬 AI Chat
-Chat with an AI study assistant that has *actually read your notes* (powered by Groq's Llama 3.3 70B model). Ask it to explain a concept, quiz you, or just reassure you that the mitochondria is indeed the powerhouse of the cell.
+Chat with an AI study assistant that has *actually read your notes* (powered by Groq's GPT-OSS 120B model). Ask it to explain a concept, quiz you, or just reassure you that the mitochondria is indeed the powerhouse of the cell.
 
 You can attach multiple files to a chat session, giving the AI full context over everything you've uploaded. It's like a tutor who did all the reading. Every time. Without complaining.
 
@@ -54,7 +54,7 @@ A full coding + study scratch pad with three modes:
 |---|---|
 | Frontend | Vanilla HTML, CSS, JavaScript |
 | Backend | Python + Flask |
-| AI | Groq API (Llama 3.3 70B via OpenAI-compatible SDK) |
+| AI | Groq API (GPT-OSS 120B via OpenAI-compatible SDK) |
 | Auth & Database | Supabase |
 | PDF Parsing | pdfplumber |
 | DOCX Parsing | python-docx |
@@ -82,7 +82,7 @@ Create a `.env` file in the project root:
 
 ```env
 GROQ_API_KEY=your_groq_api_key_here
-GROQ_MODEL=llama-3.3-70b-versatile   # optional, this is the default
+GROQ_MODEL=openai/gpt-oss-120b   # optional, this is the default
 
 SUPABASE_URL=https://your-project.supabase.co
 SUPABASE_ANON_KEY=your_anon_key_here
