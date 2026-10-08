@@ -9,3 +9,7 @@ nul
 .idea/
 venv/
 .venv/
+
+# Local admin panel (contains credentials; keep out of the public repo)
+admin.html
+admin_server.py
