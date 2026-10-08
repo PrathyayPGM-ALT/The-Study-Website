@@ -11,7 +11,7 @@ import sys
 from functools import wraps
 from collections import defaultdict, deque
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 
 from flask import Flask, request, jsonify, send_from_directory
 from flask_cors import CORS
@@ -132,10 +132,73 @@ def build_notes_context(user_id: str, file_ids: list[str]) -> str:
 
 
 class AIServiceError(Exception):
-    """The AI provider call failed. The message is safe to show the user."""
+    """The AI provider call failed.
+
+    `message` is safe to show the user, `status` is the HTTP code to return.
+    The underlying provider error is always logged in full.
+    """
+
+    def __init__(self, message: str, status: int = 502):
+        super().__init__(message)
+        self.status = status
 
 
 AI_UNAVAILABLE = "The assistant is temporarily unavailable. Please try again in a moment."
+
+
+def _provider_error_detail(exc: Exception) -> tuple[str, str]:
+    """Pull (code, message) out of an OpenAI-SDK style error body."""
+    body = getattr(exc, "body", None)
+    if isinstance(body, dict):
+        err = body.get("error") or {}
+        if isinstance(err, dict):
+            return str(err.get("code") or ""), str(err.get("message") or "")
+    return "", str(exc)
+
+
+def _classify_ai_error(exc: Exception) -> AIServiceError:
+    """Turn a provider exception into something the student can act on.
+
+    Generic text is fine for transient faults, but a misconfigured model or a
+    blown context window are both things the user can actually fix - saying
+    'temporarily unavailable' for those just hides the problem.
+    """
+    status = getattr(exc, "status_code", None)
+    code, detail = _provider_error_detail(exc)
+
+    if code == "model_not_found" or status == 404:
+        return AIServiceError(
+            f"The AI model '{DEFAULT_MODEL}' is not available on this API key. "
+            "Check the GROQ_MODEL setting on the server.",
+            503,
+        )
+
+    # Groq returns 413 + code=rate_limit_exceeded when the prompt alone exceeds
+    # the tokens-per-minute allowance.
+    if status == 413 or (code == "rate_limit_exceeded" and "too large" in detail.lower()):
+        return AIServiceError(
+            "Those notes are too long to send in one go. Select fewer files, or "
+            "split the document into smaller parts.",
+            413,
+        )
+
+    if status == 429 or code == "rate_limit_exceeded":
+        return AIServiceError(
+            "The AI is rate-limited right now. Wait a few seconds and try again.",
+            429,
+        )
+
+    if status == 401:
+        return AIServiceError(
+            "The server's AI credentials were rejected. Check the GROQ_API_KEY setting.",
+            503,
+        )
+
+    if status is not None and 500 <= status < 600:
+        return AIServiceError(
+            "The AI provider is having problems. Please try again shortly.", 502)
+
+    return AIServiceError(AI_UNAVAILABLE, 502)
 
 
 def chat_completion(messages: list[dict], system: str = "") -> str:
@@ -150,7 +213,7 @@ def chat_completion(messages: list[dict], system: str = "") -> str:
         )
     except Exception as exc:
         app.logger.exception("Groq chat completion failed (model=%s)", DEFAULT_MODEL)
-        raise AIServiceError(AI_UNAVAILABLE) from exc
+        raise _classify_ai_error(exc) from exc
     return response.choices[0].message.content
 
 
@@ -357,7 +420,7 @@ def send_message(session_id: str):
     try:
         reply = chat_completion(messages, system=system_prompt)
     except AIServiceError as exc:
-        return jsonify({"error": str(exc)}), 502
+        return jsonify({"error": str(exc)}), exc.status
 
     supabase.table("chat_messages").insert({
         "session_id": session_id,
@@ -425,7 +488,7 @@ def generate_output():
     try:
         result = chat_completion(messages)
     except AIServiceError as exc:
-        return jsonify({"error": str(exc)}), 502
+        return jsonify({"error": str(exc)}), exc.status
 
     output_id = str(uuid.uuid4())
     supabase.table("saved_outputs").insert({
@@ -516,7 +579,7 @@ def generate_cornell():
     try:
         result = chat_completion(messages, system=CORNELL_SYSTEM)
     except AIServiceError as exc:
-        return jsonify({"error": str(exc)}), 502
+        return jsonify({"error": str(exc)}), exc.status
 
     try:
         cleaned = result.strip()
@@ -574,7 +637,7 @@ def playground_ask():
     try:
         reply = chat_completion([{"role": "user", "content": prompt}], system=system)
     except AIServiceError as exc:
-        return jsonify({"error": str(exc)}), 502
+        return jsonify({"error": str(exc)}), exc.status
 
     return jsonify({"response": reply})
 
@@ -708,7 +771,7 @@ def playground_explain():
     try:
         reply = chat_completion([{"role": "user", "content": prompt}], system=PLAYGROUND_SYSTEM)
     except AIServiceError as exc:
-        return jsonify({"error": str(exc)}), 502
+        return jsonify({"error": str(exc)}), exc.status
 
     return jsonify({"explanation": reply})
 
@@ -766,9 +829,453 @@ def language_practice():
     try:
         reply = chat_completion(messages[1:], system=system)
     except AIServiceError as exc:
-        return jsonify({"error": str(exc)}), 502
+        return jsonify({"error": str(exc)}), exc.status
 
     return jsonify({"reply": reply})
+
+
+# =====================================================================
+# Study loop: spaced repetition, quiz scoring, weak-topic detection
+# =====================================================================
+
+def parse_json_block(raw: str):
+    """Parse model JSON that may be wrapped in a markdown code fence."""
+    cleaned = (raw or "").strip()
+    if cleaned.startswith("```"):
+        cleaned = cleaned.split("\n", 1)[1] if "\n" in cleaned else cleaned[3:]
+        if cleaned.rstrip().endswith("```"):
+            cleaned = cleaned.rstrip()[:-3]
+    return json.loads(cleaned.strip())
+
+
+MIN_EASE = 1.3
+AGAIN_DELAY_MINUTES = 10
+
+
+def sm2(ease: float, interval_days: float, repetitions: int, lapses: int, grade: int):
+    """SuperMemo-2. grade: 0=again, 3=hard, 4=good, 5=easy.
+
+    Returns (ease, interval_days, repetitions, lapses, due_at).
+    """
+    grade = max(0, min(5, int(grade)))
+
+    if grade < 3:
+        # Lapse: reset the repetition chain and show it again this session.
+        repetitions = 0
+        lapses += 1
+        interval_days = 0.0
+        due_at = datetime.now(timezone.utc) + timedelta(minutes=AGAIN_DELAY_MINUTES)
+    else:
+        if repetitions == 0:
+            interval_days = 1.0
+        elif repetitions == 1:
+            interval_days = 6.0
+        else:
+            interval_days = round(interval_days * ease, 2)
+        repetitions += 1
+        due_at = datetime.now(timezone.utc) + timedelta(days=interval_days)
+
+    # Ease only moves on graded recall, and never below the SM-2 floor.
+    ease = ease + (0.1 - (5 - grade) * (0.08 + (5 - grade) * 0.02))
+    ease = max(MIN_EASE, round(ease, 3))
+
+    return ease, float(interval_days), repetitions, lapses, due_at
+
+
+def humanize_interval(interval_days: float, grade: int) -> str:
+    if grade < 3:
+        return f"{AGAIN_DELAY_MINUTES} min"
+    if interval_days < 1:
+        return "today"
+    if interval_days == 1:
+        return "tomorrow"
+    if interval_days < 30:
+        return f"{int(round(interval_days))} days"
+    if interval_days < 365:
+        return f"{round(interval_days / 30, 1)} months"
+    return f"{round(interval_days / 365, 1)} years"
+
+
+@app.route("/api/flashcards/import", methods=["POST"])
+@require_auth
+def import_flashcards():
+    """Turn a saved flashcards output into scheduled, reviewable cards."""
+    user = request.user
+    body = request.get_json(silent=True) or {}
+    output_id = body.get("output_id")
+    deck = (body.get("deck") or "").strip()
+    cards_in = body.get("cards")
+
+    if output_id and not cards_in:
+        result = (supabase.table("saved_outputs").select("content, type")
+                  .eq("id", output_id).eq("user_id", user.id).execute())
+        if not result.data:
+            return jsonify({"error": "Output not found"}), 404
+        try:
+            cards_in = parse_json_block(result.data[0]["content"])
+        except Exception:
+            return jsonify({"error": "That output is not a readable flashcard set."}), 422
+
+    if not isinstance(cards_in, list) or not cards_in:
+        return jsonify({"error": "No cards to import"}), 400
+
+    rows = []
+    for card in cards_in:
+        if not isinstance(card, dict):
+            continue
+        front = str(card.get("front", "")).strip()
+        back = str(card.get("back", "")).strip()
+        if not front or not back:
+            continue
+        rows.append({
+            "id": str(uuid.uuid4()),
+            "user_id": user.id,
+            "output_id": output_id,
+            "deck": deck or "Default",
+            "front": front[:2000],
+            "back": back[:4000],
+            "due_at": datetime.now(timezone.utc).isoformat(),
+        })
+
+    if not rows:
+        return jsonify({"error": "No valid cards found"}), 422
+
+    supabase.table("flashcards").insert(rows).execute()
+    return jsonify({"imported": len(rows), "deck": deck or "Default"}), 201
+
+
+@app.route("/api/flashcards/due", methods=["GET"])
+@require_auth
+def flashcards_due():
+    user = request.user
+    limit = min(int(request.args.get("limit", 40)), 100)
+    deck = request.args.get("deck")
+
+    query = (supabase.table("flashcards").select("*")
+             .eq("user_id", user.id).eq("suspended", False)
+             .lte("due_at", datetime.now(timezone.utc).isoformat())
+             .order("due_at").limit(limit))
+    if deck:
+        query = query.eq("deck", deck)
+
+    return jsonify({"cards": query.execute().data or []})
+
+
+@app.route("/api/flashcards/<card_id>/review", methods=["POST"])
+@require_auth
+def review_flashcard(card_id: str):
+    user = request.user
+    body = request.get_json(silent=True) or {}
+    try:
+        grade = int(body.get("grade"))
+    except (TypeError, ValueError):
+        return jsonify({"error": "grade is required (0, 3, 4 or 5)"}), 400
+
+    result = (supabase.table("flashcards").select("*")
+              .eq("id", card_id).eq("user_id", user.id).execute())
+    if not result.data:
+        return jsonify({"error": "Card not found"}), 404
+    card = result.data[0]
+
+    ease, interval_days, repetitions, lapses, due_at = sm2(
+        float(card.get("ease") or 2.5),
+        float(card.get("interval_days") or 0),
+        int(card.get("repetitions") or 0),
+        int(card.get("lapses") or 0),
+        grade,
+    )
+
+    now_iso = datetime.now(timezone.utc).isoformat()
+    supabase.table("flashcards").update({
+        "ease": ease,
+        "interval_days": interval_days,
+        "repetitions": repetitions,
+        "lapses": lapses,
+        "due_at": due_at.isoformat(),
+        "last_grade": grade,
+        "last_reviewed_at": now_iso,
+    }).eq("id", card_id).eq("user_id", user.id).execute()
+
+    supabase.table("card_reviews").insert({
+        "id": str(uuid.uuid4()),
+        "user_id": user.id,
+        "card_id": card_id,
+        "grade": grade,
+        "interval_after": interval_days,
+        "ease_after": ease,
+    }).execute()
+
+    return jsonify({
+        "card_id": card_id,
+        "ease": ease,
+        "interval_days": interval_days,
+        "repetitions": repetitions,
+        "lapses": lapses,
+        "due_at": due_at.isoformat(),
+        "next_review": humanize_interval(interval_days, grade),
+    })
+
+
+@app.route("/api/flashcards/stats", methods=["GET"])
+@require_auth
+def flashcard_stats():
+    user = request.user
+    cards = (supabase.table("flashcards")
+             .select("due_at, repetitions, lapses, deck, suspended")
+             .eq("user_id", user.id).execute().data or [])
+
+    now = datetime.now(timezone.utc)
+    due = new = learning = mature = 0
+    decks: dict[str, int] = {}
+
+    for card in cards:
+        if card.get("suspended"):
+            continue
+        name = card.get("deck") or "Default"
+        decks[name] = decks.get(name, 0) + 1
+        reps = int(card.get("repetitions") or 0)
+        if reps == 0:
+            new += 1
+        elif reps < 3:
+            learning += 1
+        else:
+            mature += 1
+        try:
+            if datetime.fromisoformat(str(card["due_at"]).replace("Z", "+00:00")) <= now:
+                due += 1
+        except (ValueError, KeyError):
+            pass
+
+    reviews = (supabase.table("card_reviews").select("reviewed_at, grade")
+               .eq("user_id", user.id).order("reviewed_at", desc=True).limit(2000)
+               .execute().data or [])
+
+    review_days = set()
+    for review in reviews:
+        try:
+            review_days.add(datetime.fromisoformat(
+                str(review["reviewed_at"]).replace("Z", "+00:00")).date())
+        except (ValueError, KeyError):
+            pass
+
+    # Count back from today, or yesterday so an unstarted day does not break it.
+    streak = 0
+    cursor = now.date()
+    if cursor not in review_days:
+        cursor -= timedelta(days=1)
+    while cursor in review_days:
+        streak += 1
+        cursor -= timedelta(days=1)
+
+    today_iso = now.date().isoformat()
+    reviewed_today = sum(
+        1 for review in reviews
+        if str(review.get("reviewed_at", ""))[:10] == today_iso
+    )
+
+    return jsonify({
+        "total": sum(decks.values()),
+        "due": due,
+        "new": new,
+        "learning": learning,
+        "mature": mature,
+        "decks": decks,
+        "streak_days": streak,
+        "reviewed_today": reviewed_today,
+        "total_reviews": len(reviews),
+    })
+
+
+@app.route("/api/flashcards/<card_id>", methods=["DELETE"])
+@require_auth
+def delete_flashcard(card_id: str):
+    user = request.user
+    supabase.table("flashcards").delete().eq("id", card_id).eq("user_id", user.id).execute()
+    return jsonify({"deleted": card_id})
+
+
+# -------------------------------------------------------------- quiz attempts
+
+@app.route("/api/quiz/attempt", methods=["POST"])
+@require_auth
+def submit_quiz_attempt():
+    """Grade a quiz server-side and store the attempt."""
+    user = request.user
+    body = request.get_json(silent=True) or {}
+    questions = body.get("questions") or []
+    chosen = body.get("answers") or {}
+    output_id = body.get("output_id")
+    file_ids = body.get("file_ids") or []
+
+    if not questions:
+        return jsonify({"error": "No questions supplied"}), 400
+
+    graded = []
+    score = 0
+    for index, question in enumerate(questions):
+        correct_index = question.get("answer")
+        picked = chosen.get(str(index), chosen.get(index))
+        is_correct = picked is not None and picked == correct_index
+        if is_correct:
+            score += 1
+        graded.append({
+            "q": question.get("q", ""),
+            "options": question.get("options", []),
+            "answer": correct_index,
+            "chosen": picked,
+            "correct": is_correct,
+        })
+
+    attempt_id = str(uuid.uuid4())
+    supabase.table("quiz_attempts").insert({
+        "id": attempt_id,
+        "user_id": user.id,
+        "output_id": output_id,
+        "file_ids": file_ids,
+        "score": score,
+        "total": len(questions),
+        "answers": graded,
+    }).execute()
+
+    return jsonify({
+        "attempt_id": attempt_id,
+        "score": score,
+        "total": len(questions),
+        "percent": round(100 * score / len(questions)),
+        "missed": [g for g in graded if not g["correct"]],
+    }), 201
+
+
+@app.route("/api/quiz/attempts", methods=["GET"])
+@require_auth
+def list_quiz_attempts():
+    user = request.user
+    limit = min(int(request.args.get("limit", 50)), 200)
+    attempts = (supabase.table("quiz_attempts")
+                .select("id, output_id, score, total, created_at")
+                .eq("user_id", user.id).order("created_at", desc=True)
+                .limit(limit).execute().data or [])
+    return jsonify({"attempts": attempts})
+
+
+# ---------------------------------------------------------------- weak topics
+
+WEAK_TOPICS_SYSTEM = (
+    "You analyse a student's mistakes and name the underlying concepts they are "
+    "struggling with. Return ONLY valid JSON, no markdown, no code fences, in this "
+    "exact format:\n"
+    '[{"topic":"Short concept name","why":"One sentence on what they are getting wrong",'
+    '"evidence_count":2}]\n'
+    "Group related mistakes into a single topic. Return at most 6 topics, most "
+    "important first. If there is not enough evidence, return []."
+)
+
+
+@app.route("/api/study/weak-topics", methods=["GET"])
+@require_auth
+@rate_limit(10, 60)
+def weak_topics():
+    """Cluster missed quiz questions and lapsed cards into named weak concepts."""
+    user = request.user
+
+    attempts = (supabase.table("quiz_attempts").select("answers, created_at")
+                .eq("user_id", user.id).order("created_at", desc=True)
+                .limit(20).execute().data or [])
+    missed = []
+    for attempt in attempts:
+        for answer in (attempt.get("answers") or []):
+            if not answer.get("correct") and answer.get("q"):
+                options = answer.get("options") or []
+                correct_idx = answer.get("answer")
+                correct_text = (options[correct_idx]
+                                if isinstance(correct_idx, int) and 0 <= correct_idx < len(options)
+                                else "")
+                missed.append(f"Q: {answer['q']}\n   Correct answer: {correct_text}")
+
+    lapsed = (supabase.table("flashcards").select("front, lapses")
+              .eq("user_id", user.id).gte("lapses", 2)
+              .order("lapses", desc=True).limit(25).execute().data or [])
+
+    if not missed and not lapsed:
+        return jsonify({
+            "topics": [],
+            "message": "Not enough data yet. Take a quiz or review some flashcards first.",
+        })
+
+    parts = []
+    if missed:
+        parts.append("Quiz questions the student got wrong:\n" + "\n".join(missed[:40]))
+    if lapsed:
+        parts.append("Flashcards the student repeatedly forgets:\n" + "\n".join(
+            f"- {c['front']} (forgotten {c['lapses']}x)" for c in lapsed))
+
+    try:
+        raw = chat_completion([{"role": "user", "content": "\n\n".join(parts)}],
+                              system=WEAK_TOPICS_SYSTEM)
+        topics = parse_json_block(raw)
+        if not isinstance(topics, list):
+            topics = []
+    except AIServiceError as exc:
+        return jsonify({"error": str(exc)}), exc.status
+    except Exception:
+        app.logger.exception("Weak-topic analysis returned unparseable JSON")
+        return jsonify({"error": "Could not analyse your results right now."}), 502
+
+    return jsonify({
+        "topics": topics,
+        "missed_questions": len(missed),
+        "lapsed_cards": len(lapsed),
+    })
+
+
+@app.route("/api/quiz/retry-weak", methods=["POST"])
+@require_auth
+@rate_limit(10, 60)
+def retry_weak_quiz():
+    """Build a fresh quiz aimed squarely at what the student keeps missing."""
+    user = request.user
+    body = request.get_json(silent=True) or {}
+    file_ids = body.get("file_ids") or []
+
+    attempts = (supabase.table("quiz_attempts").select("answers")
+                .eq("user_id", user.id).order("created_at", desc=True)
+                .limit(10).execute().data or [])
+    missed = [a["q"] for attempt in attempts
+              for a in (attempt.get("answers") or [])
+              if not a.get("correct") and a.get("q")]
+
+    if not missed:
+        return jsonify({"error": "No missed questions to practise yet."}), 422
+
+    notes = build_notes_context(user.id, file_ids) if file_ids else ""
+    instruction = (
+        "The student previously got these questions wrong:\n"
+        + "\n".join(f"- {q}" for q in missed[:25])
+        + "\n\nWrite a NEW 10-question multiple-choice quiz targeting the same "
+          "underlying concepts. Do not reuse the exact wording above - test the "
+          "concept from a different angle so they cannot pass by memorising.\n"
+          "Return ONLY valid JSON, no markdown, no code fences:\n"
+          '[{"q":"Question text?","options":["A) ...","B) ...","C) ...","D) ..."],"answer":0}]'
+    )
+    if notes:
+        instruction += f"\n\nBase the questions on these notes:\n{notes}"
+
+    try:
+        result = chat_completion([{"role": "user", "content": instruction}])
+    except AIServiceError as exc:
+        return jsonify({"error": str(exc)}), exc.status
+
+    output_id = str(uuid.uuid4())
+    supabase.table("saved_outputs").insert({
+        "id": output_id,
+        "user_id": user.id,
+        "type": "quiz",
+        "file_ids": file_ids,
+        "content": result,
+    }).execute()
+
+    return jsonify({"output_id": output_id, "type": "quiz", "content": result,
+                    "targeted": len(missed[:25])}), 201
 
 
 @app.route("/api/config", methods=["GET"])
@@ -779,9 +1286,47 @@ def get_config():
     })
 
 
+def verify_model_available() -> dict:
+    """Check the configured model at boot.
+
+    A wrong GROQ_MODEL is invisible until the first chat request fails, and the
+    env var overrides the code default - so a stale value in the deploy
+    environment silently breaks the whole app. Surface it at startup instead.
+    """
+    try:
+        available = {m.id for m in client.models.list().data}
+    except Exception as exc:
+        app.logger.warning("Could not verify model list at startup: %s", exc)
+        return {"verified": False, "reason": "model list unavailable"}
+
+    if DEFAULT_MODEL in available:
+        app.logger.info("Model OK: %s", DEFAULT_MODEL)
+        return {"verified": True}
+
+    chat_models = sorted(
+        m for m in available
+        if not any(tag in m for tag in ("whisper", "tts", "guard", "orpheus"))
+    )
+    app.logger.error(
+        "GROQ_MODEL=%r is NOT available on this API key. Chat will fail with 503. "
+        "Available chat models: %s",
+        DEFAULT_MODEL, ", ".join(chat_models) or "(none)",
+    )
+    return {"verified": False, "reason": "model not available",
+            "available_chat_models": chat_models}
+
+
+MODEL_STATUS = verify_model_available()
+
+
 @app.route("/api/health", methods=["GET"])
 def health():
-    return jsonify({"status": "ok", "model": DEFAULT_MODEL})
+    ok = MODEL_STATUS.get("verified", False)
+    return jsonify({
+        "status": "ok" if ok else "degraded",
+        "model": DEFAULT_MODEL,
+        "model_status": MODEL_STATUS,
+    }), (200 if ok else 503)
 
 
 @app.route("/")
