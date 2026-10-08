@@ -84,6 +84,11 @@ Create a `.env` file in the project root:
 GROQ_API_KEY=your_groq_api_key_here
 GROQ_MODEL=openai/gpt-oss-120b   # optional, this is the default
 
+# Code runner isolation. "docker" is strongly recommended for any public deploy.
+CODE_SANDBOX=subprocess          # subprocess | docker
+CODE_SANDBOX_IMAGE=python:3.12-alpine
+CODE_TIMEOUT=10
+
 SUPABASE_URL=https://your-project.supabase.co
 SUPABASE_ANON_KEY=your_anon_key_here
 SUPABASE_SERVICE_KEY=your_service_role_key_here
@@ -150,7 +155,7 @@ All endpoints under `/api/` require a `Bearer` token in the `Authorization` head
 ## Limitations
 
 - Uploaded files are stored temporarily on the server during text extraction, then deleted. The extracted text is what gets saved to Supabase.
-- The code runner executes Python only, with a hard 10-second timeout. It is not sandboxed beyond that, so don't deploy this publicly without adding proper isolation.
+- The code runner executes Python only. Set `CODE_SANDBOX=docker` for real isolation (no network, read-only filesystem, 256MB memory, all capabilities dropped). The default `subprocess` mode is hardened — the child process gets a scrubbed environment so it cannot read your API keys, runs in an isolated temp directory, and has its output capped — but it is *not* a true sandbox. Use Docker mode in production.
 - Maximum upload size is 16MB. If your PDF is larger than that, consider that perhaps your professor assigned too much reading.
 
 ---

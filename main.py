@@ -1,9 +1,15 @@
 import os
 import uuid
 import json
+import time
+import logging
+import shutil
+import threading
 import subprocess
 import tempfile
 import sys
+from functools import wraps
+from collections import defaultdict, deque
 from pathlib import Path
 from datetime import datetime
 
@@ -38,6 +44,38 @@ DEFAULT_MODEL = os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_SERVICE_KEY = os.getenv("SUPABASE_SERVICE_KEY")
 supabase = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
+
+logging.basicConfig(
+    level=os.getenv("LOG_LEVEL", "INFO").upper(),
+    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+)
+
+_rate_buckets: dict[str, deque] = defaultdict(deque)
+_rate_lock = threading.Lock()
+
+
+def rate_limit(limit: int, window_seconds: int = 60, scope: str = ""):
+    """Per-user sliding-window cap. Keeps one account from draining the API quota."""
+    def decorator(f):
+        @wraps(f)
+        def wrapper(*args, **kwargs):
+            user = getattr(request, "user", None)
+            key = f"{scope or f.__name__}:{getattr(user, 'id', request.remote_addr)}"
+            now = time.monotonic()
+            with _rate_lock:
+                bucket = _rate_buckets[key]
+                while bucket and now - bucket[0] > window_seconds:
+                    bucket.popleft()
+                if len(bucket) >= limit:
+                    retry_after = int(window_seconds - (now - bucket[0])) + 1
+                    return jsonify({
+                        "error": f"You are going a bit fast. Try again in {retry_after}s.",
+                    }), 429
+                bucket.append(now)
+            return f(*args, **kwargs)
+        return wrapper
+    return decorator
+
 
 
 def get_user_from_token():
@@ -93,15 +131,26 @@ def build_notes_context(user_id: str, file_ids: list[str]) -> str:
     return "\n".join(parts)
 
 
+class AIServiceError(Exception):
+    """The AI provider call failed. The message is safe to show the user."""
+
+
+AI_UNAVAILABLE = "The assistant is temporarily unavailable. Please try again in a moment."
+
+
 def chat_completion(messages: list[dict], system: str = "") -> str:
     full_messages = []
     if system:
         full_messages.append({"role": "system", "content": system})
     full_messages.extend(messages)
-    response = client.chat.completions.create(
-        model=DEFAULT_MODEL,
-        messages=full_messages,
-    )
+    try:
+        response = client.chat.completions.create(
+            model=DEFAULT_MODEL,
+            messages=full_messages,
+        )
+    except Exception as exc:
+        app.logger.exception("Groq chat completion failed (model=%s)", DEFAULT_MODEL)
+        raise AIServiceError(AI_UNAVAILABLE) from exc
     return response.choices[0].message.content
 
 
@@ -175,6 +224,7 @@ def list_files():
 
 @app.route("/api/files/upload", methods=["POST"])
 @require_auth
+@rate_limit(20, 60)
 def upload_file():
     user = request.user
     if "file" not in request.files:
@@ -196,9 +246,10 @@ def upload_file():
 
     try:
         text = extract_text(save_path, extension)
-    except Exception as exc:
+    except Exception:
+        app.logger.exception("Text extraction failed for %s", filename)
         save_path.unlink(missing_ok=True)
-        return jsonify({"error": f"Could not extract text: {exc}"}), 422
+        return jsonify({"error": "Could not read that file. It may be corrupt, password-protected, or a scanned image with no selectable text."}), 422
 
     file_size = save_path.stat().st_size
 
@@ -278,6 +329,7 @@ def get_chat(session_id: str):
 
 @app.route("/api/chat/<session_id>", methods=["POST"])
 @require_auth
+@rate_limit(30, 60)
 def send_message(session_id: str):
     user = request.user
     body = request.get_json(silent=True) or {}
@@ -304,7 +356,7 @@ def send_message(session_id: str):
 
     try:
         reply = chat_completion(messages, system=system_prompt)
-    except Exception as exc:
+    except AIServiceError as exc:
         return jsonify({"error": str(exc)}), 502
 
     supabase.table("chat_messages").insert({
@@ -350,6 +402,7 @@ OUTPUT_PROMPTS = {
 
 @app.route("/api/output/generate", methods=["POST"])
 @require_auth
+@rate_limit(15, 60)
 def generate_output():
     user = request.user
     body = request.get_json(silent=True) or {}
@@ -371,7 +424,7 @@ def generate_output():
 
     try:
         result = chat_completion(messages)
-    except Exception as exc:
+    except AIServiceError as exc:
         return jsonify({"error": str(exc)}), 502
 
     output_id = str(uuid.uuid4())
@@ -445,6 +498,7 @@ CORNELL_SYSTEM = (
 
 @app.route("/api/cornell/generate", methods=["POST"])
 @require_auth
+@rate_limit(15, 60)
 def generate_cornell():
     user = request.user
     body = request.get_json(silent=True) or {}
@@ -461,7 +515,7 @@ def generate_cornell():
 
     try:
         result = chat_completion(messages, system=CORNELL_SYSTEM)
-    except Exception as exc:
+    except AIServiceError as exc:
         return jsonify({"error": str(exc)}), 502
 
     try:
@@ -502,6 +556,7 @@ PLAYGROUND_SYSTEM = (
 
 @app.route("/api/playground/ask", methods=["POST"])
 @require_auth
+@rate_limit(30, 60)
 def playground_ask():
     user = request.user
     body = request.get_json(silent=True) or {}
@@ -518,40 +573,124 @@ def playground_ask():
 
     try:
         reply = chat_completion([{"role": "user", "content": prompt}], system=system)
-    except Exception as exc:
+    except AIServiceError as exc:
         return jsonify({"error": str(exc)}), 502
 
     return jsonify({"response": reply})
 
 
+CODE_TIMEOUT = int(os.getenv("CODE_TIMEOUT", "10"))
+MAX_CODE_CHARS = 100_000
+MAX_OUTPUT_CHARS = 20_000
+# "docker" = real isolation (recommended for any public deploy).
+# "subprocess" = hardened local fallback: secrets stripped, isolated cwd, no user site.
+CODE_SANDBOX = os.getenv("CODE_SANDBOX", "subprocess").lower()
+CODE_SANDBOX_IMAGE = os.getenv("CODE_SANDBOX_IMAGE", "python:3.12-alpine")
+
+
+def _truncate_output(text: str) -> str:
+    if text and len(text) > MAX_OUTPUT_CHARS:
+        return text[:MAX_OUTPUT_CHARS] + '\n...[output truncated]'
+    return text
+
+
+def _sandbox_env(workdir: str) -> dict:
+    """A minimal environment for untrusted code.
+
+    The parent process holds GROQ_API_KEY and SUPABASE_SERVICE_KEY in os.environ
+    (load_dotenv puts them there), and subprocess inherits the parent environment
+    by default -- so user code could simply print them. Build the child's env from
+    scratch instead of inheriting.
+    """
+    keep = ("PATH", "SYSTEMROOT", "WINDIR", "COMSPEC", "LANG", "LC_ALL", "TZ")
+    env = {k: os.environ[k] for k in keep if k in os.environ}
+    env.update({
+        "HOME": workdir,
+        "TMPDIR": workdir,
+        "TEMP": workdir,
+        "TMP": workdir,
+        "PYTHONIOENCODING": "utf-8",
+        "PYTHONDONTWRITEBYTECODE": "1",
+        "PYTHONUNBUFFERED": "1",
+        "PYTHONNOUSERSITE": "1",
+    })
+    return env
+
+
+def _run_docker(workdir: str) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        [
+            "docker", "run", "--rm",
+            "--network", "none",
+            "--memory", "256m", "--cpus", "0.5", "--pids-limit", "64",
+            "--read-only",
+            "--tmpfs", "/tmp:rw,size=16m,noexec,nosuid",
+            "--security-opt", "no-new-privileges",
+            "--cap-drop", "ALL",
+            "-v", f"{workdir}:/sandbox:ro",
+            "-w", "/sandbox",
+            CODE_SANDBOX_IMAGE,
+            "python", "-I", "-B", "main.py",
+        ],
+        capture_output=True, text=True, timeout=CODE_TIMEOUT + 10,
+    )
+
+
+def _run_subprocess(workdir: str, script: str) -> subprocess.CompletedProcess:
+    kwargs = {}
+    if os.name == "posix":
+        kwargs["start_new_session"] = True  # so the timeout kill takes the whole group
+    return subprocess.run(
+        [sys.executable, "-I", "-B", script],
+        capture_output=True, text=True, timeout=CODE_TIMEOUT,
+        cwd=workdir, env=_sandbox_env(workdir), stdin=subprocess.DEVNULL,
+        **kwargs,
+    )
+
+
 @app.route("/api/playground/run", methods=["POST"])
 @require_auth
+@rate_limit(20, 60)
 def playground_run():
     body = request.get_json(silent=True) or {}
     code = body.get("code", "")
     if not code.strip():
         return jsonify({"error": "code is required"}), 400
+    if len(code) > MAX_CODE_CHARS:
+        return jsonify({"error": "That script is too large to run."}), 413
 
-    with tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False, encoding="utf-8") as tmp:
-        tmp.write(code)
-        tmp_path = tmp.name
-
+    workdir = tempfile.mkdtemp(prefix="tsw_run_")
+    script = os.path.join(workdir, "main.py")
     try:
-        proc = subprocess.run(
-            [sys.executable, tmp_path],
-            capture_output=True, text=True, timeout=10,
-        )
-        return jsonify({"stdout": proc.stdout, "stderr": proc.stderr, "exit_code": proc.returncode})
+        with open(script, "w", encoding="utf-8") as fh:
+            fh.write(code)
+
+        if CODE_SANDBOX == "docker":
+            proc = _run_docker(workdir)
+        else:
+            proc = _run_subprocess(workdir, script)
+
+        return jsonify({
+            "stdout": _truncate_output(proc.stdout),
+            "stderr": _truncate_output(proc.stderr),
+            "exit_code": proc.returncode,
+            "sandbox": CODE_SANDBOX,
+        })
     except subprocess.TimeoutExpired:
-        return jsonify({"error": "Execution timed out (10 s limit)"}), 408
-    except Exception as exc:
-        return jsonify({"error": str(exc)}), 500
+        return jsonify({"error": f"Execution timed out ({CODE_TIMEOUT}s limit)"}), 408
+    except FileNotFoundError:
+        app.logger.exception("Sandbox runtime missing (CODE_SANDBOX=%s)", CODE_SANDBOX)
+        return jsonify({"error": "The code runner is not available right now."}), 503
+    except Exception:
+        app.logger.exception("Code execution failed")
+        return jsonify({"error": "The code runner failed to start. Please try again."}), 500
     finally:
-        Path(tmp_path).unlink(missing_ok=True)
+        shutil.rmtree(workdir, ignore_errors=True)
 
 
 @app.route("/api/playground/explain", methods=["POST"])
 @require_auth
+@rate_limit(30, 60)
 def playground_explain():
     body = request.get_json(silent=True) or {}
     code = (body.get("code") or "").strip()
@@ -568,7 +707,7 @@ def playground_explain():
 
     try:
         reply = chat_completion([{"role": "user", "content": prompt}], system=PLAYGROUND_SYSTEM)
-    except Exception as exc:
+    except AIServiceError as exc:
         return jsonify({"error": str(exc)}), 502
 
     return jsonify({"explanation": reply})
@@ -576,6 +715,7 @@ def playground_explain():
 
 @app.route("/api/language/practice", methods=["POST"])
 @require_auth
+@rate_limit(40, 60)
 def language_practice():
     body = request.get_json(silent=True) or {}
     language = (body.get("language") or "Spanish").strip()
@@ -625,7 +765,7 @@ def language_practice():
 
     try:
         reply = chat_completion(messages[1:], system=system)
-    except Exception as exc:
+    except AIServiceError as exc:
         return jsonify({"error": str(exc)}), 502
 
     return jsonify({"reply": reply})
