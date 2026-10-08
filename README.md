@@ -36,6 +36,14 @@ All outputs are saved so you can come back to them later. No more regenerating t
 ### 📝 Cornell Notes
 Generates structured Cornell-format notes from your uploaded files, complete with cues, detailed notes per cue, and a summary paragraph. The AI ensures the cue and notes arrays always match up, which is already more organized than any notes you've taken in a lecture hall.
 
+### 🧠 Review (Spaced Repetition)
+Flashcards you generate can be added to a scheduled review deck. Cards are scheduled with the **SM-2 algorithm** — the same one Anki uses — so each card comes back right before you'd forget it. Grade yourself *Again / Hard / Good / Easy* and the interval adapts: a card you know cold drifts out to months, one you keep blanking on comes back in ten minutes.
+
+Comes with a day streak, due-card counts, and a quiz history. Keyboard-driven: `Space` reveals, `1`–`4` grade.
+
+### 🎯 Weak Topics
+Every quiz is now scored and stored. The app aggregates the questions you got wrong and the cards you keep forgetting, then asks the AI to name the *underlying concepts* you're struggling with — not just "question 4", but "you keep confusing NADH and FADH2 yields". One click generates a fresh quiz targeting exactly those concepts, worded differently so you can't pass by memorising.
+
 ### 📅 Study Calendar
 Plan your study sessions. It's there. Use it. You know you won't, but it's there.
 
@@ -106,6 +114,8 @@ You'll need the following tables in your Supabase project:
 - `chat_messages` — individual messages (`session_id`, `user_id`, `role`, `content`, `created_at`)
 - `saved_outputs` — generated outputs (`id`, `user_id`, `type`, `file_ids`, `content`, `cornell_data`, `created_at`)
 
+Then run **`schema/001_study_loop.sql`** in the Supabase SQL editor to add the spaced-repetition tables (`flashcards`, `card_reviews`, `quiz_attempts`). It is additive and sets up RLS for you. The Review section stays empty until you do.
+
 Enable Row Level Security (RLS) and make sure users can only access their own data. This is important. Don't skip it.
 
 ### Run the server
@@ -130,7 +140,7 @@ All endpoints under `/api/` require a `Bearer` token in the `Authorization` head
 
 | Method | Endpoint | Description |
 |---|---|---|
-| `GET` | `/api/health` | Health check — returns model name |
+| `GET` | `/api/health` | Health check — returns model name and whether it is actually available (503 if not) |
 | `GET` | `/api/config` | Returns public Supabase config for frontend |
 | `GET` | `/api/me` | Get current user's profile |
 | `GET` | `/api/files` | List uploaded files |
@@ -149,6 +159,15 @@ All endpoints under `/api/` require a `Bearer` token in the `Authorization` head
 | `POST` | `/api/playground/ask` | Ask the AI a question |
 | `POST` | `/api/playground/run` | Execute Python code |
 | `POST` | `/api/playground/explain` | Explain code |
+| `POST` | `/api/flashcards/import` | Add a flashcard output to the review deck |
+| `GET` | `/api/flashcards/due` | Cards due for review now |
+| `POST` | `/api/flashcards/<id>/review` | Grade a card (SM-2 reschedules it) |
+| `GET` | `/api/flashcards/stats` | Due counts, streak, maturity breakdown |
+| `DELETE` | `/api/flashcards/<id>` | Delete a card |
+| `POST` | `/api/quiz/attempt` | Score a quiz and record the attempt |
+| `GET` | `/api/quiz/attempts` | Quiz score history |
+| `POST` | `/api/quiz/retry-weak` | Generate a quiz targeting past mistakes |
+| `GET` | `/api/study/weak-topics` | Named concepts you keep getting wrong |
 
 ---
 
@@ -156,6 +175,7 @@ All endpoints under `/api/` require a `Bearer` token in the `Authorization` head
 
 - Uploaded files are stored temporarily on the server during text extraction, then deleted. The extracted text is what gets saved to Supabase.
 - The code runner executes Python only. Set `CODE_SANDBOX=docker` for real isolation (no network, read-only filesystem, 256MB memory, all capabilities dropped). The default `subprocess` mode is hardened — the child process gets a scrubbed environment so it cannot read your API keys, runs in an isolated temp directory, and has its output capped — but it is *not* a true sandbox. Use Docker mode in production.
+- **Groq's free tier allows only 8,000 tokens per minute.** Notes are sent to the model in full, so a large PDF can exceed that in a single request and will fail with a "notes are too long" message. Select fewer files, split the document, or upgrade the Groq tier.
 - Maximum upload size is 16MB. If your PDF is larger than that, consider that perhaps your professor assigned too much reading.
 
 ---

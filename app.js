@@ -71,6 +71,7 @@ function showApp() {
   document.getElementById('app-screen').classList.remove('hidden');
   renderSidebar();
   switchSection('home');
+  refreshDueBadge();
 }
 
 function renderAuthForm() {
@@ -366,6 +367,7 @@ function switchSection(name) {
     cornell:    ['Cornell Notes', 'Generate structured notes using the Cornell method'],
     calendar:   ['Study Calendar', 'Plan your study sessions with Pomodoro'],
     playground: ['Playground', 'Run code and explore ideas freely'],
+    review:     ['Review', 'Spaced repetition - study what you are about to forget'],
     language:   ['Language Speaking', 'Practice foreign language speaking assignments'],
     settings:   ['Settings', 'Manage your profile and preferences'],
   };
@@ -379,7 +381,7 @@ function switchSection(name) {
   const renders = {
     home: renderHome, files: renderFiles, chat: renderChat, output: renderOutput,
     cornell: renderCornell, calendar: renderCalendar, playground: renderPlayground,
-    language: renderLanguagePractice, settings: renderSettings,
+    review: renderReview, language: renderLanguagePractice, settings: renderSettings,
   };
   renders[name]();
 }
@@ -408,6 +410,11 @@ async function renderHome() {
           <div class="hc-icon">&#128172;</div>
           <div class="hc-title">Chat with AI</div>
           <div class="hc-desc">Ask questions about your notes</div>
+        </div>
+        <div class="homepage-card" id="home-review-card" onclick="switchSection('review')">
+          <div class="hc-icon">&#129504;</div>
+          <div class="hc-title">Review</div>
+          <div class="hc-desc" id="home-review-desc">Spaced repetition</div>
         </div>
         <div class="homepage-card" onclick="switchSection('output')">
           <div class="hc-icon">&#128161;</div>
@@ -879,6 +886,7 @@ async function generateOutput(btn) {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ file_ids: fileIds, type: selectedOutputType, custom_prompt: customPrompt }),
     });
+    currentOutputId = data.output_id;
     if (selectedOutputType === 'quiz') renderInteractiveQuiz(data.content);
     else if (selectedOutputType === 'flashcards') renderInteractiveFlashcards(data.content);
     else document.getElementById('output-result-body').innerHTML = `<div class="output-result md-prose fade-in">${renderMarkdown(data.content)}</div>`;
@@ -923,6 +931,7 @@ async function viewOutput(id) {
     const data = await api(`/output/${id}`);
     const box = document.getElementById('output-result-body');
     if (box) {
+      currentOutputId = id;
       if (data.type === 'quiz') renderInteractiveQuiz(data.content);
       else if (data.type === 'flashcards') renderInteractiveFlashcards(data.content);
       else box.innerHTML = `<div class="output-result md-prose fade-in">${renderMarkdown(data.content)}</div>`;
@@ -940,6 +949,7 @@ async function deleteOutput(e, id) {
 }
 
 let fcData = [], fcIndex = 0, fcFlipped = false;
+let currentOutputId = null;
 
 function renderInteractiveFlashcards(content) {
   const box = document.getElementById('output-result-body');
@@ -968,6 +978,12 @@ function renderFlashcardUI() {
         <span class="fc-counter">${fcIndex + 1} / ${fcData.length}</span>
         <button class="btn btn-ghost" onclick="fcNext()" ${fcIndex === fcData.length - 1 ? 'disabled' : ''}>&#9654;</button>
       </div>
+      <button class="btn btn-primary w-full" style="margin-top:12px" onclick="importFlashcardDeck(this)">
+        &#129504; Add to review deck
+      </button>
+      <p class="text-xs text-muted" style="text-align:center;margin-top:6px">
+        Schedules these cards with spaced repetition so you see them right before you would forget.
+      </p>
     </div>`;
 }
 
@@ -1024,7 +1040,34 @@ function selectQuizAnswer(qi, oi) {
   if (sub && !quizSubmitted) sub.disabled = answered < total;
 }
 
-function submitQuiz() { quizSubmitted = true; renderQuizUI(); }
+async function submitQuiz() {
+  quizSubmitted = true;
+  renderQuizUI();
+  // Record the attempt so it feeds streaks, history and weak-topic analysis.
+  try {
+    const result = await api('/quiz/attempt', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        questions: quizData,
+        answers: quizAnswers,
+        output_id: currentOutputId,
+        file_ids: [...state.selectedFiles],
+      }),
+    });
+    if (result.missed && result.missed.length) {
+      const box = document.querySelector('.quiz-container');
+      if (box) {
+        const tip = document.createElement('button');
+        tip.className = 'btn btn-ghost w-full';
+        tip.style.marginTop = '8px';
+        tip.innerHTML = `&#127919; Review the ${result.missed.length} you missed`;
+        tip.onclick = () => switchSection('review');
+        box.appendChild(tip);
+      }
+    }
+  } catch {}
+}
 function retakeQuiz() { quizAnswers = {}; quizSubmitted = false; renderQuizUI(); }
 
 async function renderCornell() {
@@ -1898,6 +1941,9 @@ const SHORTCUTS = [
   { keys: ['6'], label: 'Go to Study Calendar' },
   { keys: ['7'], label: 'Go to Playground' },
   { keys: ['8'], label: 'Go to Language Speaking' },
+  { keys: ['9'], label: 'Go to Review' },
+  { keys: ['Space'], label: 'Reveal answer (in a review)' },
+  { keys: ['1', '2', '3', '4'], label: 'Grade card: Again / Hard / Good / Easy' },
   { keys: ['T'], label: 'Toggle light / dark theme' },
   { keys: ['?'], label: 'Show this help' },
   { keys: ['Esc'], label: 'Close dialogs' },
@@ -1938,6 +1984,7 @@ function closeShortcuts() {
 const _navKeyMap = {
   '1': 'home', '2': 'files', '3': 'chat', '4': 'output',
   '5': 'cornell', '6': 'calendar', '7': 'playground', '8': 'language',
+  '9': 'review',
 };
 
 function _isTyping(el) {
@@ -1962,6 +2009,22 @@ document.addEventListener('keydown', (e) => {
 
   if (e.key === '?') { e.preventDefault(); openShortcuts(); return; }
   if (e.key === 't' || e.key === 'T') { e.preventDefault(); toggleTheme(); return; }
+
+  // Review session: space reveals, 1-4 grade. Claimed before the nav digits so
+  // grading does not navigate away mid-card.
+  if (currentSection === 'review' && review.queue.length && review.index < review.queue.length) {
+    if (e.key === ' ' || e.key === 'Enter') {
+      e.preventDefault();
+      if (!review.revealed) revealAnswer();
+      return;
+    }
+    if (review.revealed && ['1', '2', '3', '4'].includes(e.key)) {
+      e.preventDefault();
+      gradeCard(GRADES[Number(e.key) - 1].g);
+      return;
+    }
+  }
+
   if (_navKeyMap[e.key]) { e.preventDefault(); switchSection(_navKeyMap[e.key]); }
 });
 
@@ -1978,3 +2041,319 @@ document.addEventListener('keydown', (e) => {
 applyThemeIcon();
 
 initAuth();
+
+
+// ══════════════════════════════════════════════════════════════════════════
+// Review - spaced repetition (SM-2), scored quizzes, weak-topic analysis
+// ══════════════════════════════════════════════════════════════════════════
+
+const review = { queue: [], index: 0, revealed: false, stats: null, done: 0, busy: false };
+
+// SM-2 grades. "Again" requeues in ~10 min; the rest schedule forward.
+const GRADES = [
+  { g: 0, label: 'Again', hint: 'Blanked', cls: 'grade-again' },
+  { g: 3, label: 'Hard',  hint: 'Struggled', cls: 'grade-hard' },
+  { g: 4, label: 'Good',  hint: 'Recalled it', cls: 'grade-good' },
+  { g: 5, label: 'Easy',  hint: 'Instant', cls: 'grade-easy' },
+];
+
+async function refreshDueBadge() {
+  try {
+    const stats = await apiQuiet('/flashcards/stats');
+    if (!stats) return;
+    review.stats = stats;
+    const badge = document.getElementById('badge-due');
+    if (badge) {
+      badge.textContent = stats.due;
+      badge.hidden = stats.due === 0;
+    }
+    const desc = document.getElementById('home-review-desc');
+    if (desc) {
+      desc.textContent = stats.due > 0
+        ? `${stats.due} card${stats.due === 1 ? '' : 's'} due now`
+        : stats.total > 0 ? 'All caught up' : 'Spaced repetition';
+    }
+    const card = document.getElementById('home-review-card');
+    if (card) card.classList.toggle('has-due', stats.due > 0);
+  } catch {}
+}
+
+// A fetch that never toasts - used for background/polling calls.
+async function apiQuiet(path, opts = {}) {
+  try {
+    const token = await getToken();
+    const r = await fetch(API + path, {
+      ...opts,
+      headers: { ...(opts.headers || {}), 'Authorization': 'Bearer ' + token },
+    });
+    if (!r.ok) return null;
+    return await r.json();
+  } catch { return null; }
+}
+
+async function renderReview() {
+  const root = document.getElementById('content-root');
+  root.innerHTML = `
+    <div id="review-stats-row" class="stat-row"></div>
+    <div class="grid-2">
+      <div>
+        <div class="card mb-4">
+          <div class="card-header">
+            <span style="font-size:20px">&#129504;</span>
+            <span class="card-title">Review session</span>
+          </div>
+          <div class="card-body" id="review-body">
+            <div class="empty"><div class="empty-icon" style="animation:spin 1s linear infinite">&#10227;</div><h3>Loading your cards...</h3></div>
+          </div>
+        </div>
+      </div>
+      <div>
+        <div class="card mb-4">
+          <div class="card-header">
+            <span style="font-size:20px">&#127919;</span>
+            <span class="card-title">Weak topics</span>
+            <button class="btn btn-ghost btn-sm" style="margin-left:auto" onclick="loadWeakTopics(true)">Analyse</button>
+          </div>
+          <div class="card-body" id="weak-topics-body">
+            <p class="text-sm text-muted">Click <strong>Analyse</strong> to find the concepts you keep getting wrong.</p>
+          </div>
+        </div>
+        <div class="card">
+          <div class="card-header">
+            <span style="font-size:20px">&#128202;</span>
+            <span class="card-title">Quiz history</span>
+          </div>
+          <div class="card-body" id="quiz-history-body">
+            <p class="text-sm text-muted">No attempts yet.</p>
+          </div>
+        </div>
+      </div>
+    </div>`;
+
+  await Promise.all([loadReviewStats(), loadDueCards(), loadQuizHistory()]);
+}
+
+async function loadReviewStats() {
+  const stats = await apiQuiet('/flashcards/stats');
+  if (!stats) return;
+  review.stats = stats;
+  const row = document.getElementById('review-stats-row');
+  if (!row) return;
+  const tiles = [
+    { label: 'Due now',   value: stats.due,          accent: stats.due > 0 },
+    { label: 'Day streak', value: stats.streak_days, accent: stats.streak_days > 0, suffix: stats.streak_days > 0 ? ' \u{1F525}' : '' },
+    { label: 'Reviewed today', value: stats.reviewed_today },
+    { label: 'Mature cards', value: stats.mature },
+    { label: 'Total cards', value: stats.total },
+  ];
+  row.innerHTML = tiles.map(t => `
+    <div class="stat-tile ${t.accent ? 'accent' : ''}">
+      <div class="stat-value">${t.value}${t.suffix || ''}</div>
+      <div class="stat-label">${t.label}</div>
+    </div>`).join('');
+  const badge = document.getElementById('badge-due');
+  if (badge) { badge.textContent = stats.due; badge.hidden = stats.due === 0; }
+}
+
+async function loadDueCards() {
+  const data = await apiQuiet('/flashcards/due?limit=40');
+  review.queue = (data && data.cards) || [];
+  review.index = 0;
+  review.revealed = false;
+  review.done = 0;
+  renderReviewCard();
+}
+
+function renderReviewCard() {
+  const box = document.getElementById('review-body');
+  if (!box) return;
+
+  const total = review.stats ? review.stats.total : 0;
+
+  if (!review.queue.length) {
+    box.innerHTML = total === 0
+      ? `<div class="empty">
+           <div class="empty-icon">&#129504;</div>
+           <h3>No cards yet</h3>
+           <p>Generate a flashcard set from your notes, then click <strong>Add to review deck</strong> to start scheduling them.</p>
+           <button class="btn btn-primary empty-cta" onclick="switchSection('output')">&#127183; Generate flashcards</button>
+         </div>`
+      : `<div class="empty">
+           <div class="empty-icon">&#9989;</div>
+           <h3>All caught up${review.done ? ` - ${review.done} reviewed` : ''}</h3>
+           <p>Nothing is due right now. Come back later and your next batch will be waiting.</p>
+         </div>`;
+    return;
+  }
+
+  if (review.index >= review.queue.length) {
+    box.innerHTML = `<div class="empty">
+        <div class="empty-icon">&#127881;</div>
+        <h3>Session complete</h3>
+        <p>You reviewed ${review.done} card${review.done === 1 ? '' : 's'}. Nice work.</p>
+        <button class="btn btn-primary empty-cta" onclick="loadDueCards()">Check for more</button>
+      </div>`;
+    loadReviewStats();
+    return;
+  }
+
+  const card = review.queue[review.index];
+  const progress = Math.round(100 * review.index / review.queue.length);
+
+  box.innerHTML = `
+    <div class="review-progress-bar"><div class="review-progress-fill" style="width:${progress}%"></div></div>
+    <div class="review-meta">
+      <span>${review.index + 1} of ${review.queue.length}</span>
+      <span>${card.repetitions > 0 ? `seen ${card.repetitions}x` : 'new card'}${card.lapses ? ` &middot; forgotten ${card.lapses}x` : ''}</span>
+    </div>
+
+    <div class="review-card" onclick="${review.revealed ? '' : 'revealAnswer()'}">
+      <span class="fc-label">Question</span>
+      <div class="review-front">${escapeHtml(card.front)}</div>
+      ${review.revealed ? `
+        <hr class="review-divider">
+        <span class="fc-label">Answer</span>
+        <div class="review-back">${escapeHtml(card.back)}</div>` : `
+        <div class="fc-hint">Click to reveal, or press Space</div>`}
+    </div>
+
+    ${review.revealed ? `
+      <div class="grade-row">
+        ${GRADES.map(g => `
+          <button class="grade-btn ${g.cls}" ${review.busy ? 'disabled' : ''} onclick="gradeCard(${g.g})">
+            <span class="grade-label">${g.label}</span>
+            <span class="grade-hint">${g.hint}</span>
+          </button>`).join('')}
+      </div>
+      <p class="text-xs text-muted" style="text-align:center;margin-top:8px">Press 1-4 to grade</p>`
+    : `<button class="btn btn-primary w-full" style="margin-top:14px" onclick="revealAnswer()">Reveal answer</button>`}`;
+}
+
+function revealAnswer() {
+  if (review.revealed) return;
+  review.revealed = true;
+  renderReviewCard();
+}
+
+async function gradeCard(grade) {
+  if (review.busy) return;
+  const card = review.queue[review.index];
+  if (!card) return;
+  review.busy = true;
+
+  try {
+    const result = await api(`/flashcards/${card.id}/review`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ grade }),
+    });
+    review.done++;
+    toast(`Next review: ${result.next_review}`, grade < 3 ? 'info' : 'success');
+
+    // "Again" puts the card back near the end of this session.
+    if (grade < 3) review.queue.push(card);
+  } catch {
+    review.busy = false;
+    return;
+  }
+
+  review.busy = false;
+  review.index++;
+  review.revealed = false;
+  renderReviewCard();
+  refreshDueBadge();
+}
+
+async function loadWeakTopics(force) {
+  const box = document.getElementById('weak-topics-body');
+  if (!box) return;
+  if (force) {
+    box.innerHTML = `<div class="empty" style="padding:16px"><div class="empty-icon" style="animation:spin 1s linear infinite">&#10227;</div><h3>Analysing your mistakes...</h3></div>`;
+  }
+  try {
+    const data = await api('/study/weak-topics');
+    if (!data.topics || !data.topics.length) {
+      box.innerHTML = `<p class="text-sm text-muted">${escapeHtml(data.message || 'Nothing to flag yet - keep studying.')}</p>`;
+      return;
+    }
+    box.innerHTML = `
+      <p class="text-xs text-muted" style="margin-bottom:10px">
+        From ${data.missed_questions} missed question${data.missed_questions === 1 ? '' : 's'}
+        and ${data.lapsed_cards} forgotten card${data.lapsed_cards === 1 ? '' : 's'}.
+      </p>
+      ${data.topics.map(t => `
+        <div class="weak-topic">
+          <div class="weak-topic-name">${escapeHtml(t.topic)}</div>
+          <div class="weak-topic-why">${escapeHtml(t.why || '')}</div>
+        </div>`).join('')}
+      <button class="btn btn-primary w-full" style="margin-top:12px" onclick="buildWeakQuiz(this)">
+        &#10067; Quiz me on these
+      </button>`;
+  } catch {
+    box.innerHTML = `<p class="text-sm text-muted">Could not analyse right now.</p>`;
+  }
+}
+
+async function buildWeakQuiz(btn) {
+  const original = btn.innerHTML;
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spin">&#10227;</span> Building quiz...';
+  try {
+    const data = await api('/quiz/retry-weak', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ file_ids: [...state.selectedFiles] }),
+    });
+    switchSection('output');
+    setTimeout(() => {
+      currentOutputId = data.output_id;
+      renderInteractiveQuiz(data.content);
+      toast('Targeted quiz ready', 'success');
+    }, 60);
+  } catch {
+    btn.disabled = false;
+    btn.innerHTML = original;
+  }
+}
+
+async function loadQuizHistory() {
+  const box = document.getElementById('quiz-history-body');
+  if (!box) return;
+  const data = await apiQuiet('/quiz/attempts?limit=10');
+  const attempts = (data && data.attempts) || [];
+  if (!attempts.length) {
+    box.innerHTML = `<p class="text-sm text-muted">No attempts yet. Take a quiz and your scores will show up here.</p>`;
+    return;
+  }
+  box.innerHTML = attempts.map(a => {
+    const pct = Math.round(100 * a.score / a.total);
+    const tone = pct >= 80 ? 'good' : pct >= 50 ? 'mid' : 'bad';
+    return `
+      <div class="attempt-row">
+        <div class="attempt-bar"><div class="attempt-fill ${tone}" style="width:${pct}%"></div></div>
+        <div class="attempt-score ${tone}">${a.score}/${a.total}</div>
+        <div class="attempt-date text-xs text-muted">${new Date(a.created_at).toLocaleDateString()}</div>
+      </div>`;
+  }).join('');
+}
+
+// Add a generated flashcard set to the scheduled review deck.
+async function importFlashcardDeck(btn) {
+  if (!currentOutputId) { toast('Generate or open a flashcard set first', 'error'); return; }
+  const original = btn.innerHTML;
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spin">&#10227;</span> Adding...';
+  try {
+    const data = await api('/flashcards/import', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ output_id: currentOutputId }),
+    });
+    toast(`${data.imported} cards added to your review deck`, 'success');
+    btn.innerHTML = '&#10003; Added to deck';
+    refreshDueBadge();
+  } catch {
+    btn.disabled = false;
+    btn.innerHTML = original;
+  }
+}
