@@ -121,14 +121,204 @@ def extract_text(filepath: Path, extension: str) -> str:
     return filepath.read_text(encoding="utf-8", errors="replace")
 
 
-def build_notes_context(user_id: str, file_ids: list[str]) -> str:
+def build_notes_context(user_id: str, file_ids: list[str], budget: int | None = None) -> str:
+    """Whole-file context, truncated to a token budget.
+
+    Used for whole-document tasks (summaries, Cornell notes) and as the
+    fallback when chunk retrieval is unavailable. Without the budget a single
+    large PDF exceeds the provider's per-minute token allowance and the
+    request is rejected outright.
+    """
     parts = []
+    remaining = budget if budget is not None else None
+
     for fid in file_ids:
-        result = supabase.table("files").select("filename, text_content").eq("id", fid).eq("user_id", user_id).execute()
-        if result.data:
-            row = result.data[0]
-            parts.append(f"--- Notes: {row['filename']} ---\n{row['text_content']}\n")
+        result = (supabase.table("files").select("filename, text_content")
+                  .eq("id", fid).eq("user_id", user_id).execute())
+        if not result.data:
+            continue
+        row = result.data[0]
+        body = row["text_content"] or ""
+
+        if remaining is not None:
+            if remaining <= 0:
+                parts.append(f"--- Notes: {row['filename']} (omitted: context full) ---\n")
+                continue
+            allowed_chars = remaining * 4
+            if len(body) > allowed_chars:
+                body = body[:allowed_chars].rstrip() + "\n[... truncated to fit the context limit ...]"
+            remaining -= estimate_tokens(body)
+
+        parts.append(f"--- Notes: {row['filename']} ---\n{body}\n")
+
     return "\n".join(parts)
+
+
+# =====================================================================
+# Chunking + retrieval
+#
+# Groq's free tier allows 8000 tokens/minute. build_notes_context sent whole
+# files, so one real lecture PDF exceeded the per-request budget outright
+# (HTTP 413). Documents are now split on upload and only the passages relevant
+# to the question are sent, under an explicit token budget.
+# =====================================================================
+
+CHUNK_TARGET_CHARS = int(os.getenv("CHUNK_TARGET_CHARS", "3200"))
+CHUNK_OVERLAP_CHARS = int(os.getenv("CHUNK_OVERLAP_CHARS", "320"))
+# Tokens of notes we are willing to put in one prompt. Kept well under the
+# 8000 TPM allowance so the question, system prompt and reply all fit too.
+CONTEXT_TOKEN_BUDGET = int(os.getenv("CONTEXT_TOKEN_BUDGET", "4500"))
+RETRIEVE_TOP_K = int(os.getenv("RETRIEVE_TOP_K", "8"))
+
+
+def estimate_tokens(text: str) -> int:
+    """Rough token count. ~4 chars/token for English prose, rounded up.
+
+    Deliberately an estimate: the point is to stay under a budget, and a
+    cheap conservative guess beats a tokenizer dependency we would have to
+    keep in step with whichever model is configured.
+    """
+    return (len(text) + 3) // 4
+
+
+def chunk_text(text: str,
+               target_chars: int = CHUNK_TARGET_CHARS,
+               overlap: int = CHUNK_OVERLAP_CHARS) -> list[dict]:
+    """Split text into overlapping chunks, preferring paragraph boundaries.
+
+    Overlap keeps a sentence that straddles a boundary retrievable from both
+    sides, so an answer is not cut in half by the split.
+    """
+    text = (text or "").strip()
+    if not text:
+        return []
+
+    chunks = []
+    start = 0
+    length = len(text)
+
+    while start < length:
+        end = min(start + target_chars, length)
+
+        if end < length:
+            # Prefer a paragraph break, then a sentence end, then a space.
+            window_from = max(start + target_chars // 2, start + 1)
+            for sep in ("\n\n", ". ", ".\n", "\n", " "):
+                found = text.rfind(sep, window_from, end)
+                if found != -1:
+                    end = found + len(sep)
+                    break
+
+        body = text[start:end].strip()
+        if body:
+            chunks.append({
+                "content": body,
+                "char_start": start,
+                "char_end": end,
+                "token_est": estimate_tokens(body),
+            })
+
+        if end >= length:
+            break
+        start = max(end - overlap, start + 1)
+
+    return chunks
+
+
+def store_file_chunks(user_id: str, file_id: str, filename: str, text: str) -> int:
+    pieces = chunk_text(text)
+    if not pieces:
+        return 0
+    rows = [{
+        "id": str(uuid.uuid4()),
+        "user_id": user_id,
+        "file_id": file_id,
+        "filename": filename,
+        "chunk_index": i,
+        "content": p["content"],
+        "char_start": p["char_start"],
+        "char_end": p["char_end"],
+        "token_est": p["token_est"],
+    } for i, p in enumerate(pieces)]
+
+    # Batched: a long document can run to hundreds of chunks.
+    for i in range(0, len(rows), 100):
+        supabase.table("document_chunks").insert(rows[i:i + 100]).execute()
+    return len(rows)
+
+
+def retrieve_context(user_id: str, file_ids: list[str], query: str,
+                     budget: int = CONTEXT_TOKEN_BUDGET,
+                     top_k: int = RETRIEVE_TOP_K) -> tuple[str, list[dict]]:
+    """Fetch the passages most relevant to `query`, within a token budget.
+
+    Returns (context_text, sources). Falls back to a budgeted slice of the raw
+    files when chunks are unavailable (e.g. schema/002 not applied yet, or a
+    file uploaded before chunking existed), so retrieval degrades instead of
+    breaking.
+    """
+    try:
+        result = supabase.rpc("match_chunks", {
+            "p_user_id": user_id,
+            "p_file_ids": file_ids or None,
+            "p_query": query or "",
+            "p_limit": top_k,
+        }).execute()
+        matches = result.data or []
+    except Exception:
+        app.logger.warning(
+            "Chunk retrieval unavailable, falling back to truncated notes. "
+            "Has schema/002_chunks.sql been applied?", exc_info=True)
+        return build_notes_context(user_id, file_ids, budget=budget), []
+
+    if not matches:
+        return build_notes_context(user_id, file_ids, budget=budget), []
+
+    parts, sources, used = [], [], 0
+    for match in matches:
+        cost = int(match.get("token_est") or estimate_tokens(match["content"]))
+        if used + cost > budget:
+            continue
+        used += cost
+        label = f"{match['filename']} #{int(match['chunk_index']) + 1}"
+        parts.append(f"[{label}]\n{match['content']}")
+        sources.append({
+            "filename": match["filename"],
+            "chunk_index": match["chunk_index"],
+            "file_id": match["file_id"],
+            "label": label,
+        })
+
+    if not parts:
+        return build_notes_context(user_id, file_ids, budget=budget), []
+
+    return "\n\n".join(parts), sources
+
+
+HISTORY_TOKEN_BUDGET = int(os.getenv("HISTORY_TOKEN_BUDGET", "1800"))
+
+
+def trim_history(messages: list[dict], budget: int) -> list[dict]:
+    """Keep the most recent turns that fit in `budget` tokens.
+
+    Walks backwards so the newest context survives, then restores order.
+    """
+    kept, used = [], 0
+    for message in reversed(messages):
+        cost = estimate_tokens(message.get("content") or "")
+        if used + cost > budget and kept:
+            break
+        used += cost
+        kept.append(message)
+    return list(reversed(kept))
+
+
+CITATION_RULE = (
+    "The notes below are labelled like [lecture.pdf #3]. When you use a passage, "
+    "cite its label inline so the student can check it. Only cite labels that "
+    "appear below. If the notes do not answer the question, say so plainly "
+    "rather than guessing."
+)
 
 
 class AIServiceError(Exception):
@@ -325,6 +515,13 @@ def upload_file():
         "storage_path": str(save_path),
     }).execute()
 
+    # Index the document so questions retrieve passages instead of whole files.
+    try:
+        chunk_count = store_file_chunks(user.id, file_id, filename, text)
+    except Exception:
+        app.logger.exception("Chunk indexing failed for %s (file stays usable)", filename)
+        chunk_count = 0
+
     save_path.unlink(missing_ok=True)
 
     return jsonify({
@@ -358,9 +555,15 @@ def create_session():
     file_ids = body.get("file_ids", [])
     system_prompt = CHAT_SYSTEM
 
+    # Notes are deliberately NOT baked into the stored prompt. Doing that meant
+    # every message in the session re-sent the entire document, which exceeds
+    # the provider's per-minute token allowance on any real set of notes.
+    # Relevant passages are retrieved per message instead.
     if file_ids:
-        notes = build_notes_context(user.id, file_ids)
-        system_prompt += f"\n\nThe user has shared the following study notes:\n{notes}"
+        system_prompt += (
+            "\n\nThe user has attached study notes. Relevant excerpts are "
+            "supplied with each question.\n" + CITATION_RULE
+        )
 
     session_id = str(uuid.uuid4())
     supabase.table("chat_sessions").insert({
@@ -400,14 +603,29 @@ def send_message(session_id: str):
     if not user_message:
         return jsonify({"error": "Message is required"}), 400
 
-    session_result = supabase.table("chat_sessions").select("system_prompt").eq("id", session_id).eq("user_id", user.id).execute()
+    session_result = (supabase.table("chat_sessions").select("system_prompt, file_ids")
+                      .eq("id", session_id).eq("user_id", user.id).execute())
     if not session_result.data:
         return jsonify({"error": "Session not found"}), 404
 
-    system_prompt = session_result.data[0]["system_prompt"]
+    session = session_result.data[0]
+    system_prompt = session["system_prompt"]
+    file_ids = session.get("file_ids") or []
 
-    msgs_result = supabase.table("chat_messages").select("role, content").eq("session_id", session_id).order("created_at").execute()
-    messages = [{"role": m["role"], "content": m["content"]} for m in (msgs_result.data or [])]
+    # Pull only the passages relevant to this question.
+    sources = []
+    if file_ids:
+        notes, sources = retrieve_context(user.id, file_ids, user_message)
+        if notes:
+            system_prompt += f"\n\nExcerpts from the student's notes:\n{notes}"
+
+    msgs_result = (supabase.table("chat_messages").select("role, content")
+                   .eq("session_id", session_id).order("created_at").execute())
+    history = [{"role": m["role"], "content": m["content"]} for m in (msgs_result.data or [])]
+
+    # Trim oldest-first to a token budget. Replaying an unbounded history was
+    # the second way a long conversation could blow the per-minute allowance.
+    messages = trim_history(history, HISTORY_TOKEN_BUDGET)
     messages.append({"role": "user", "content": user_message})
 
     supabase.table("chat_messages").insert({
@@ -429,7 +647,11 @@ def send_message(session_id: str):
         "content": reply,
     }).execute()
 
-    return jsonify({"reply": reply, "message_count": len(messages) + 1})
+    return jsonify({
+        "reply": reply,
+        "message_count": len(messages) + 1,
+        "sources": sources,
+    })
 
 
 @app.route("/api/chat/<session_id>", methods=["DELETE"])
@@ -478,7 +700,7 @@ def generate_output():
     if output_type not in OUTPUT_TYPES and not custom_prompt:
         return jsonify({"error": f"type must be one of {OUTPUT_TYPES} or supply custom_prompt"}), 400
 
-    notes = build_notes_context(user.id, file_ids)
+    notes = build_notes_context(user.id, file_ids, budget=CONTEXT_TOKEN_BUDGET)
     if not notes.strip():
         return jsonify({"error": "No text found in the selected files"}), 422
 
@@ -570,7 +792,7 @@ def generate_cornell():
     if not file_ids:
         return jsonify({"error": "Provide at least one file_id"}), 400
 
-    notes = build_notes_context(user.id, file_ids)
+    notes = build_notes_context(user.id, file_ids, budget=CONTEXT_TOKEN_BUDGET)
     if not notes.strip():
         return jsonify({"error": "No text found in the selected files"}), 422
 
@@ -631,8 +853,10 @@ def playground_ask():
 
     system = PLAYGROUND_SYSTEM
     if file_ids:
-        notes = build_notes_context(user.id, file_ids)
-        system += f"\n\nThe user has provided these study notes for reference:\n{notes}"
+        notes, _ = retrieve_context(user.id, file_ids, prompt)
+        if notes:
+            system += (f"\n\nThe user has provided these study notes for reference:\n{notes}"
+                       f"\n{CITATION_RULE}")
 
     try:
         reply = chat_completion([{"role": "user", "content": prompt}], system=system)
@@ -1247,7 +1471,7 @@ def retry_weak_quiz():
     if not missed:
         return jsonify({"error": "No missed questions to practise yet."}), 422
 
-    notes = build_notes_context(user.id, file_ids) if file_ids else ""
+    notes = build_notes_context(user.id, file_ids, budget=CONTEXT_TOKEN_BUDGET // 2) if file_ids else ""
     instruction = (
         "The student previously got these questions wrong:\n"
         + "\n".join(f"- {q}" for q in missed[:25])
@@ -1276,6 +1500,41 @@ def retry_weak_quiz():
 
     return jsonify({"output_id": output_id, "type": "quiz", "content": result,
                     "targeted": len(missed[:25])}), 201
+
+
+@app.route("/api/files/reindex", methods=["POST"])
+@require_auth
+@rate_limit(3, 60)
+def reindex_files():
+    """Chunk files that were uploaded before chunking existed.
+
+    Idempotent: a file's existing chunks are cleared before reindexing.
+    """
+    user = request.user
+    body = request.get_json(silent=True) or {}
+    only = set(body.get("file_ids") or [])
+
+    files = (supabase.table("files").select("id, filename, text_content")
+             .eq("user_id", user.id).execute().data or [])
+
+    indexed = skipped = 0
+    for row in files:
+        if only and row["id"] not in only:
+            continue
+        text = row.get("text_content") or ""
+        if not text.strip():
+            skipped += 1
+            continue
+        try:
+            (supabase.table("document_chunks").delete()
+             .eq("user_id", user.id).eq("file_id", row["id"]).execute())
+            store_file_chunks(user.id, row["id"], row["filename"], text)
+            indexed += 1
+        except Exception:
+            app.logger.exception("Reindex failed for %s", row["filename"])
+            skipped += 1
+
+    return jsonify({"indexed": indexed, "skipped": skipped, "total": len(files)})
 
 
 @app.route("/api/config", methods=["GET"])

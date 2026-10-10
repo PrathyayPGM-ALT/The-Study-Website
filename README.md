@@ -36,6 +36,11 @@ All outputs are saved so you can come back to them later. No more regenerating t
 ### 📝 Cornell Notes
 Generates structured Cornell-format notes from your uploaded files, complete with cues, detailed notes per cue, and a summary paragraph. The AI ensures the cue and notes arrays always match up, which is already more organized than any notes you've taken in a lecture hall.
 
+### 🔍 Retrieval & Citations
+Notes are split into overlapping chunks on upload and indexed with Postgres full-text search. When you ask a question, only the passages that actually relate to it are sent to the model — so the answer is more precise, it costs a fraction of the tokens, and **replies cite where they came from** (`[lecture.pdf #3]`), letting you verify the AI didn't make it up.
+
+This also removes a hard ceiling: previously the entire document went into every prompt, which exceeded Groq's free-tier token allowance on any real PDF and failed outright.
+
 ### 🧠 Review (Spaced Repetition)
 Flashcards you generate can be added to a scheduled review deck. Cards are scheduled with the **SM-2 algorithm** — the same one Anki uses — so each card comes back right before you'd forget it. Grade yourself *Again / Hard / Good / Easy* and the interval adapts: a card you know cold drifts out to months, one you keep blanking on comes back in ten minutes.
 
@@ -114,7 +119,12 @@ You'll need the following tables in your Supabase project:
 - `chat_messages` — individual messages (`session_id`, `user_id`, `role`, `content`, `created_at`)
 - `saved_outputs` — generated outputs (`id`, `user_id`, `type`, `file_ids`, `content`, `cornell_data`, `created_at`)
 
-Then run **`schema/001_study_loop.sql`** in the Supabase SQL editor to add the spaced-repetition tables (`flashcards`, `card_reviews`, `quiz_attempts`). It is additive and sets up RLS for you. The Review section stays empty until you do.
+Then run these in the Supabase SQL editor, in order. Both are additive and set up RLS for you:
+
+1. **`schema/001_study_loop.sql`** — spaced-repetition tables (`flashcards`, `card_reviews`, `quiz_attempts`). The Review section stays empty until you run it.
+2. **`schema/002_chunks.sql`** — `document_chunks` plus the `match_chunks` search function. Until you run it, retrieval falls back to sending truncated whole files, which still works but is less precise.
+
+After running 002, `POST /api/files/reindex` chunks files you uploaded earlier.
 
 Enable Row Level Security (RLS) and make sure users can only access their own data. This is important. Don't skip it.
 
@@ -159,6 +169,7 @@ All endpoints under `/api/` require a `Bearer` token in the `Authorization` head
 | `POST` | `/api/playground/ask` | Ask the AI a question |
 | `POST` | `/api/playground/run` | Execute Python code |
 | `POST` | `/api/playground/explain` | Explain code |
+| `POST` | `/api/files/reindex` | Chunk existing files for retrieval |
 | `POST` | `/api/flashcards/import` | Add a flashcard output to the review deck |
 | `GET` | `/api/flashcards/due` | Cards due for review now |
 | `POST` | `/api/flashcards/<id>/review` | Grade a card (SM-2 reschedules it) |
@@ -175,7 +186,7 @@ All endpoints under `/api/` require a `Bearer` token in the `Authorization` head
 
 - Uploaded files are stored temporarily on the server during text extraction, then deleted. The extracted text is what gets saved to Supabase.
 - The code runner executes Python only. Set `CODE_SANDBOX=docker` for real isolation (no network, read-only filesystem, 256MB memory, all capabilities dropped). The default `subprocess` mode is hardened — the child process gets a scrubbed environment so it cannot read your API keys, runs in an isolated temp directory, and has its output capped — but it is *not* a true sandbox. Use Docker mode in production.
-- **Groq's free tier allows only 8,000 tokens per minute.** Notes are sent to the model in full, so a large PDF can exceed that in a single request and will fail with a "notes are too long" message. Select fewer files, split the document, or upgrade the Groq tier.
+- **Groq's free tier allows only 8,000 tokens per minute.** Chat now retrieves just the relevant passages and trims old turns, so normal use stays well inside that. Whole-document tasks (summaries, Cornell notes) still read the full file and are truncated to a token budget — a very long PDF will be summarised from its opening portion rather than failing. Raise `CONTEXT_TOKEN_BUDGET` if you upgrade your Groq tier.
 - Maximum upload size is 16MB. If your PDF is larger than that, consider that perhaps your professor assigned too much reading.
 
 ---

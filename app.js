@@ -736,7 +736,7 @@ async function sendChatMessage(btn) {
       body: JSON.stringify({ message: msg }),
     });
     hideTyping();
-    state.chatMessages.push({ role: 'assistant', content: data.reply, created_at: new Date().toISOString() });
+    state.chatMessages.push({ role: 'assistant', content: data.reply, created_at: new Date().toISOString(), sources: data.sources || [] });
     renderChatMessages();
   } catch { hideTyping(); } finally { btn.disabled = false; }
 }
@@ -755,6 +755,11 @@ function renderChatMessages() {
       <div class="msg-avatar">${m.role === 'user' ? '&#128100;' : '&#10022;'}</div>
       <div>
         <div class="msg-bubble${m.role !== 'user' ? ' md-prose' : ''}">${m.role === 'user' ? escapeHtml(m.content) : renderMarkdown(m.content)}</div>
+        ${(m.sources && m.sources.length) ? `
+          <div class="msg-sources" title="Passages this answer was drawn from">
+            <span class="msg-sources-label">From your notes:</span>
+            ${m.sources.map(src => `<span class="source-chip">${escapeHtml(src.label)}</span>`).join('')}
+          </div>` : ''}
         <div class="msg-time">${m.created_at ? fmtTime(m.created_at) : ''}</div>
       </div>
     </div>`).join('');

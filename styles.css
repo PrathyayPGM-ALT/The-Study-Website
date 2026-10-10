@@ -1031,3 +1031,16 @@ h1, h2, h3, .card-title, .topbar-title, .auth-welcome, .auth-logo,
 
 .homepage-card.has-due { border-color: var(--accent); }
 .homepage-card.has-due .hc-desc { color: var(--accent); font-weight: 600; }
+
+/* ── Chat citations ───────────────────────────────────────────────────── */
+.msg-sources { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; margin-top: 7px; }
+.msg-sources-label { font-size: 11px; color: var(--muted); margin-right: 2px; }
+.source-chip {
+  font-size: 11px;
+  padding: 2px 8px;
+  border: 1px solid var(--border);
+  border-radius: 99px;
+  color: var(--muted);
+  background: var(--card);
+  white-space: nowrap;
+}
